@@ -23,6 +23,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@email-ai/mail-client':
+        specifier: workspace:*
+        version: link:../../packages/mail-client
       '@email-ai/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -102,6 +105,25 @@ importers:
       tsconfig-paths:
         specifier: ^4.2.0
         version: 4.2.0
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/mail-client:
+    dependencies:
+      imapflow:
+        specifier: ^1.0.0
+        version: 1.2.18
+      mailparser:
+        specifier: ^3.7.0
+        version: 3.9.6
+    devDependencies:
+      '@types/mailparser':
+        specifier: ^3.4.0
+        version: 3.4.6
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
