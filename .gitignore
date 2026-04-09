@@ -1,36 +1,36 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
+# Dependencies
+node_modules
+.pnp
 .pnp.js
 
-# testing
-/coverage
+# Build outputs
+dist
+build
+*.tsbuildinfo
 
-# next.js
-/.next/
-/out/
+# Testing
+coverage
 
-# production
-/build
+# Environment — never commit secrets
+.env
+.env.*
+!.env.example
 
-# misc
+# Prisma generated client (regenerated on install)
+.prisma
+
+# Misc
 .DS_Store
 *.pem
-
-# debug
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
-.env*.local
-.env
+# Editors
+.idea
+.vscode
+*.swp
 
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# pnpm
+.pnpm-store

@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model EmailAccount {
+  id                String      @id @default(cuid())
+  label             String
+  host              String
+  port              Int
+  username          String
+  encryptedPassword String
+  secure            Boolean     @default(true)
+  isActive          Boolean     @default(true)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  syncStates        SyncState[]
+  rawEmails         RawEmail[]
+}
+
+model SyncState {
+  id             String       @id @default(cuid())
+  accountId      String
+  mailbox        String
+  lastSyncedUid  Int          @default(0)
+  lastSyncedAt   DateTime?
+  status         SyncStatus   @default(IDLE)
+
+  account        EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, mailbox])
+}
+
+model RawEmail {
+  id            String        @id @default(cuid())
+  accountId     String
+  mailbox       String
+  uid           Int
+  rawSource     Bytes
+  internalDate  DateTime
+  flags         String[]
+  createdAt     DateTime      @default(now())
+
+  account       EmailAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  parsed        ParsedEmail?
+
+  @@unique([accountId, mailbox, uid])
+}
+
+model ParsedEmail {
+  id              String          @id @default(cuid())
+  rawEmailId      String          @unique
+  subject         String?
+  fromAddress     String?
+  fromName        String?
+  toAddresses     Json
+  ccAddresses     Json
+  textBody        String?
+  htmlBody        String?
+  attachmentCount Int             @default(0)
+  hasUnsubscribe  Boolean         @default(false)
+  parsedAt        DateTime        @default(now())
+
+  rawEmail        RawEmail        @relation(fields: [rawEmailId], references: [id], onDelete: Cascade)
+  normalized      NormalizedEmail?
+}
+
+model NormalizedEmail {
+  id             String      @id @default(cuid())
+  parsedEmailId  String      @unique
+  senderDomain   String
+  isNewsletter   Boolean     @default(false)
+  isBulk         Boolean     @default(false)
+  tags           String[]
+  normalizedAt   DateTime    @default(now())
+
+  parsedEmail    ParsedEmail @relation(fields: [parsedEmailId], references: [id], onDelete: Cascade)
+}
+
+enum SyncStatus {
+  IDLE
+  SYNCING
+  ERROR
+}

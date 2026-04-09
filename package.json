@@ -1,0 +1,26 @@
+{
+  "name": "email-ai",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm --filter @email-ai/shared build && pnpm --filter @email-ai/api build",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm --filter @email-ai/shared build && pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.5.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@nestjs/core": "^11.0.0"
+    }
+  }
+}
