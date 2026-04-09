@@ -21,6 +21,7 @@ model EmailAccount {
 
   syncStates        SyncState[]
   rawEmails         RawEmail[]
+  emailMessages     EmailMessage[]
 }
 
 model SyncState {
@@ -80,6 +81,27 @@ model NormalizedEmail {
   normalizedAt   DateTime    @default(now())
 
   parsedEmail    ParsedEmail @relation(fields: [parsedEmailId], references: [id], onDelete: Cascade)
+}
+
+model EmailMessage {
+  id            String       @id @default(cuid())
+  accountId     String
+  mailbox       String       @default("INBOX")
+  uid           Int
+  messageId     String?
+  subject       String?
+  fromAddress   String
+  fromName      String?
+  date          DateTime?
+  body          String
+  flags         String[]
+  internalDate  DateTime
+  createdAt     DateTime     @default(now())
+
+  account       EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, mailbox, uid])
+  @@index([accountId, date])
 }
 
 enum SyncStatus {
