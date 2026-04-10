@@ -72,15 +72,18 @@ model ParsedEmail {
 }
 
 model NormalizedEmail {
-  id             String      @id @default(cuid())
-  parsedEmailId  String      @unique
-  senderDomain   String
-  isNewsletter   Boolean     @default(false)
-  isBulk         Boolean     @default(false)
-  tags           String[]
-  normalizedAt   DateTime    @default(now())
+  id              String      @id @default(cuid())
+  parsedEmailId   String      @unique
+  senderDomain    String
+  isNewsletter    Boolean     @default(false)
+  isBulk          Boolean     @default(false)
+  tags            String[]
+  cleanedText     String?
+  detectedLinks   Json        @default("[]")
+  unsubscribeLink String?
+  normalizedAt    DateTime    @default(now())
 
-  parsedEmail    ParsedEmail @relation(fields: [parsedEmailId], references: [id], onDelete: Cascade)
+  parsedEmail     ParsedEmail @relation(fields: [parsedEmailId], references: [id], onDelete: Cascade)
 }
 
 model EmailMessage {

@@ -1,26 +1,39 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { NormalizedEmail } from '@prisma/client';
-import { DatabaseService } from '../database/database.service';
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { NormalizedEmail } from "@prisma/client";
+import { DatabaseService } from "../database/database.service";
+import { EmailNormalizer } from "./email-normalizer.service";
 
-const BULK_SENDER_PATTERNS = ['noreply', 'no-reply', 'donotreply', 'bounce', 'mailer-daemon'];
+const BULK_SENDER_PATTERNS = [
+  "noreply",
+  "no-reply",
+  "donotreply",
+  "bounce",
+  "mailer-daemon",
+];
 
 function extractSenderDomain(fromAddress: string | null): string {
-  if (!fromAddress) return 'unknown';
-  const atIndex = fromAddress.indexOf('@');
-  return atIndex === -1 ? 'unknown' : fromAddress.slice(atIndex + 1).toLowerCase();
+  if (!fromAddress) return "unknown";
+  const atIndex = fromAddress.indexOf("@");
+  return atIndex === -1
+    ? "unknown"
+    : fromAddress.slice(atIndex + 1).toLowerCase();
 }
 
 function isBulkSender(fromAddress: string | null): boolean {
   if (!fromAddress) return false;
-  const localPart = fromAddress.split('@')[0]?.toLowerCase() ?? '';
+  const localPart = fromAddress.split("@")[0]?.toLowerCase() ?? "";
   return BULK_SENDER_PATTERNS.some((pattern) => localPart.includes(pattern));
 }
 
-function buildTags(hasUnsubscribe: boolean, isBulk: boolean, attachmentCount: number): string[] {
+function buildTags(
+  hasUnsubscribe: boolean,
+  isBulk: boolean,
+  attachmentCount: number,
+): string[] {
   const tags: string[] = [];
-  if (hasUnsubscribe) tags.push('newsletter');
-  if (isBulk) tags.push('bulk');
-  if (attachmentCount > 0) tags.push('has-attachments');
+  if (hasUnsubscribe) tags.push("newsletter");
+  if (isBulk) tags.push("bulk");
+  if (attachmentCount > 0) tags.push("has-attachments");
   return tags;
 }
 
@@ -28,23 +41,49 @@ function buildTags(hasUnsubscribe: boolean, isBulk: boolean, attachmentCount: nu
 export class NormalizationService {
   private readonly logger = new Logger(NormalizationService.name);
 
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly normalizer: EmailNormalizer,
+  ) {}
 
   async normalizeEmail(parsedEmailId: string): Promise<NormalizedEmail> {
     const parsed = await this.db.parsedEmail.findUnique({
       where: { id: parsedEmailId },
     });
-    if (!parsed) throw new NotFoundException(`ParsedEmail ${parsedEmailId} not found`);
+    if (!parsed)
+      throw new NotFoundException(`ParsedEmail ${parsedEmailId} not found`);
 
+    // Extract metadata
     const senderDomain = extractSenderDomain(parsed.fromAddress);
     const isNewsletter = parsed.hasUnsubscribe;
     const isBulk = isBulkSender(parsed.fromAddress);
-    const tags = buildTags(parsed.hasUnsubscribe, isBulk, parsed.attachmentCount);
+    const tags = buildTags(
+      parsed.hasUnsubscribe,
+      isBulk,
+      parsed.attachmentCount,
+    );
+
+    // Normalize content
+    const { cleanedText, detectedLinks, unsubscribeLink } =
+      this.normalizer.normalize(parsed.textBody, parsed.htmlBody);
 
     return this.db.normalizedEmail.upsert({
       where: { parsedEmailId },
-      create: { parsedEmailId, senderDomain, isNewsletter, isBulk, tags },
-      update: {},
+      create: {
+        parsedEmailId,
+        senderDomain,
+        isNewsletter,
+        isBulk,
+        tags,
+        cleanedText,
+        detectedLinks: detectedLinks as any,
+        unsubscribeLink,
+      },
+      update: {
+        cleanedText,
+        detectedLinks: detectedLinks as any,
+        unsubscribeLink,
+      },
     });
   }
 
