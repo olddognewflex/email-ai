@@ -2,6 +2,8 @@ import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { NormalizedEmail } from "@prisma/client";
 import { DatabaseService } from "../database/database.service";
 import { EmailNormalizer } from "./email-normalizer.service";
+import { RulesEngineService } from "../rules-engine/rules-engine.service";
+import { RulesEngineInput } from "@email-ai/shared";
 
 const BULK_SENDER_PATTERNS = [
   "noreply",
@@ -44,6 +46,7 @@ export class NormalizationService {
   constructor(
     private readonly db: DatabaseService,
     private readonly normalizer: EmailNormalizer,
+    private readonly rulesEngine: RulesEngineService,
   ) {}
 
   async normalizeEmail(parsedEmailId: string): Promise<NormalizedEmail> {
@@ -67,6 +70,27 @@ export class NormalizationService {
     const { cleanedText, detectedLinks, unsubscribeLink } =
       this.normalizer.normalize(parsed.textBody, parsed.htmlBody);
 
+    // Run rules engine for pre-classification
+    const rulesInput: RulesEngineInput = {
+      subject: parsed.subject,
+      fromAddress: parsed.fromAddress,
+      fromName: parsed.fromName,
+      textBody: cleanedText,
+      htmlBody: parsed.htmlBody,
+      senderDomain,
+      isNewsletter,
+      isBulk,
+      hasUnsubscribe: parsed.hasUnsubscribe,
+      unsubscribeLink: unsubscribeLink ?? undefined,
+      tags,
+    };
+
+    const classification = this.rulesEngine.classify(rulesInput);
+    this.logger.debug(
+      `Email ${parsedEmailId} classified as ${classification.ruleCategory} ` +
+        `(${classification.ruleConfidence}) via rules: ${classification.matchedRules.join(", ")}`,
+    );
+
     return this.db.normalizedEmail.upsert({
       where: { parsedEmailId },
       create: {
@@ -78,11 +102,17 @@ export class NormalizationService {
         cleanedText,
         detectedLinks: detectedLinks as any,
         unsubscribeLink,
+        ruleCategory: classification.ruleCategory,
+        ruleConfidence: classification.ruleConfidence,
+        ruleReasons: classification.ruleReasons,
       },
       update: {
         cleanedText,
         detectedLinks: detectedLinks as any,
         unsubscribeLink,
+        ruleCategory: classification.ruleCategory,
+        ruleConfidence: classification.ruleConfidence,
+        ruleReasons: classification.ruleReasons,
       },
     });
   }
@@ -105,6 +135,32 @@ export class NormalizationService {
         errors++;
       }
     }
+
+    return { processed, errors };
+  }
+
+  async reprocessAll(): Promise<{ processed: number; errors: number }> {
+    const normalized = await this.db.parsedEmail.findMany({
+      where: { normalized: { isNot: null } },
+      select: { id: true },
+    });
+
+    let processed = 0;
+    let errors = 0;
+
+    for (const { id } of normalized) {
+      try {
+        await this.normalizeEmail(id);
+        processed++;
+      } catch (error) {
+        this.logger.error(`Failed to reprocess parsed email ${id}`, error);
+        errors++;
+      }
+    }
+
+    this.logger.log(
+      `Reprocessed ${processed} normalized emails (${errors} errors)`,
+    );
 
     return { processed, errors };
   }

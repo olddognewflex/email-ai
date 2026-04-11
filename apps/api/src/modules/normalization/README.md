@@ -175,10 +175,36 @@ The normalization is **idempotent** - running it multiple times on the same inpu
 POST /normalization/:parsedEmailId/normalize
 ```
 
+**Note**: This endpoint uses `upsert`, so it will:
+
+- Create a new NormalizedEmail if it doesn't exist
+- **Update** the existing NormalizedEmail if it already exists (reprocess)
+
 ### Process All Unnormalized Emails
 
 ```typescript
 POST / normalization / run;
+```
+
+Processes only emails that haven't been normalized yet.
+
+### Reprocess All Normalized Emails
+
+```typescript
+POST / normalization / reprocess;
+```
+
+**Use case**: After updating classification rules, reprocess all existing normalized emails to apply new rules.
+
+**Warning**: This can be slow for large datasets. Consider running during off-peak hours.
+
+Example response:
+
+```json
+{
+  "processed": 150,
+  "errors": 0
+}
 ```
 
 ### Service Usage
@@ -210,8 +236,46 @@ model NormalizedEmail {
   detectedLinks   Json     @default("[]")
   unsubscribeLink String?
   normalizedAt    DateTime @default(now())
+
+  // Rule-based classification
+  ruleCategory   String?   // newsletter | receipt | alert | likely_human | unknown
+  ruleConfidence String?   // high | medium | low
+  ruleReasons    String[]  // Explanation strings
 }
 ```
+
+## Reprocessing
+
+### Why Reprocess?
+
+You may want to reprocess normalized emails when:
+
+- **Classification rules updated** - New rules added or existing rules modified
+- **Bug fixes** - Issues fixed in normalizer or rules engine
+- **Retrospective analysis** - Apply new categorization to historical data
+
+### How Reprocessing Works
+
+1. The `normalizeEmail()` method uses Prisma `upsert`:
+   - **Create**: If no NormalizedEmail exists for the parsedEmailId
+   - **Update**: If NormalizedEmail already exists (reprocess)
+
+2. All fields are recalculated:
+   - `cleanedText` - Re-normalized
+   - `senderDomain` - Re-extracted
+   - `ruleCategory` - Re-classified with current rules
+   - `ruleConfidence` - Re-calculated
+   - `ruleReasons` - Updated with current matched rules
+
+3. Idempotent by design - running multiple times produces same result
+
+### Reprocessing Options
+
+| Endpoint                            | Use Case                                 |
+| ----------------------------------- | ---------------------------------------- |
+| `POST /normalization/:id/normalize` | Reprocess specific email                 |
+| `POST /normalization/run`           | Process only new (unnormalized) emails   |
+| `POST /normalization/reprocess`     | Reprocess all existing normalized emails |
 
 ## Testing
 
