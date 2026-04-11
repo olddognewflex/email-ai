@@ -83,7 +83,15 @@ model NormalizedEmail {
   unsubscribeLink String?
   normalizedAt    DateTime    @default(now())
 
+  // Rule-based classification
+  ruleCategory   String?
+  ruleConfidence String?
+  ruleReasons    String[]
+
   parsedEmail     ParsedEmail @relation(fields: [parsedEmailId], references: [id], onDelete: Cascade)
+
+  @@index([ruleCategory])
+  @@index([ruleConfidence])
 }
 
 model EmailMessage {

@@ -62,19 +62,20 @@ pnpm --filter @email-ai/api test:cov
 
 ## API — Phase 1 endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /health | Health + DB check |
-| POST | /email-accounts | Register an IMAP account |
-| GET | /email-accounts | List registered accounts |
-| GET | /email-accounts/:id | Get account by ID |
-| DELETE | /email-accounts/:id | Remove account (fails if emails exist) |
-| POST | /email-sync/:id/run?dryRun=true | Sync from IMAP (default dry-run) |
-| GET | /email-sync/:id/states | Sync state per mailbox |
-| POST | /email-parser/run | Parse all unprocessed raw emails |
-| POST | /email-parser/:id/parse | Parse a single raw email |
-| POST | /normalization/run | Normalize all unparsed emails |
-| POST | /normalization/:id/normalize | Normalize a single parsed email |
+| Method | Path                            | Description                                    |
+| ------ | ------------------------------- | ---------------------------------------------- |
+| GET    | /health                         | Health + DB check                              |
+| POST   | /email-accounts                 | Register an IMAP account                       |
+| GET    | /email-accounts                 | List registered accounts                       |
+| GET    | /email-accounts/:id             | Get account by ID                              |
+| DELETE | /email-accounts/:id             | Remove account (fails if emails exist)         |
+| POST   | /email-sync/:id/run?dryRun=true | Sync from IMAP (default dry-run)               |
+| GET    | /email-sync/:id/states          | Sync state per mailbox                         |
+| POST   | /email-parser/run               | Parse all unprocessed raw emails               |
+| POST   | /email-parser/:id/parse         | Parse a single raw email                       |
+| POST   | /normalization/run              | Normalize all unparsed emails                  |
+| POST   | /normalization/:id/normalize    | Normalize (or reprocess) a single parsed email |
+| POST   | /normalization/reprocess        | Reprocess all already-normalized emails        |
 
 `dryRun=true` (default) connects to IMAP and counts new messages without writing to the database.
 Pass `dryRun=false` to persist raw emails.
