@@ -76,9 +76,50 @@ pnpm --filter @email-ai/api test:cov
 | POST   | /normalization/run              | Normalize all unparsed emails                  |
 | POST   | /normalization/:id/normalize    | Normalize (or reprocess) a single parsed email |
 | POST   | /normalization/reprocess        | Reprocess all already-normalized emails        |
+| POST   | /classification/run             | Classify all unclassified normalized emails    |
+| POST   | /classification/:id/classify    | Classify a single normalized email             |
+| GET    | /review-queue                   | List classifications pending review            |
+| POST   | /review-queue/:id/approve       | Approve a classification                       |
+| POST   | /review-queue/:id/reject        | Reject a classification                        |
+| GET    | /digest                         | Get daily digest as JSON                       |
+| POST   | /digest/generate                | Generate and save digest to file system        |
 
 `dryRun=true` (default) connects to IMAP and counts new messages without writing to the database.
 Pass `dryRun=false` to persist raw emails.
+
+## Daily Digest & Obsidian Export
+
+Generate daily email digests grouped by actionability and export to Obsidian-compatible markdown.
+
+### Digest Grouping
+
+Emails are automatically categorized into three groups:
+
+- **Actionable**: Items requiring user action (needs_attention, reply_needed, high importance personal)
+- **FYI**: Informational items (newsletters, receipts, notifications, read_later)
+- **Low Value**: Items safe to batch process (social, archive, delete, unknown)
+
+### Generate Digest
+
+```bash
+# Get digest as JSON
+curl "http://localhost:3000/digest"
+
+# Get digest for specific date
+curl "http://localhost:3000/digest?date=2025-04-12"
+
+# Generate and save to Obsidian vault
+curl -X POST "http://localhost:3000/digest/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "outputPath": "/path/to/ObsidianVault/DailyNotes",
+    "date": "2025-04-12"
+  }'
+```
+
+Output file: `email-digest-YYYY-MM-DD.md` with idempotent filenames (same date = same file).
+
+See [Digest Module README](apps/api/src/modules/digest/README.md) for full documentation.
 
 ## Workspace structure
 

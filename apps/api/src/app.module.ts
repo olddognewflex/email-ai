@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ClassificationModule } from "./modules/classification/classification.module";
 import { ConfigModule } from "./modules/config/config.module";
 import { DatabaseModule } from "./modules/database/database.module";
+import { DigestModule } from "./modules/digest/digest.module";
 import { HealthModule } from "./modules/health/health.module";
 import { EmailAccountsModule } from "./modules/email-accounts/email-accounts.module";
 import { EmailSyncModule } from "./modules/email-sync/email-sync.module";
@@ -22,6 +23,7 @@ import { ReviewQueueModule } from "./modules/review-queue/review-queue.module";
     RulesEngineModule,
     ClassificationModule,
     ReviewQueueModule,
+    DigestModule,
   ],
 })
 export class AppModule {}
