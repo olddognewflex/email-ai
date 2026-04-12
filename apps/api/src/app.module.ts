@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { ClassificationModule } from "./modules/classification/classification.module";
 import { ConfigModule } from "./modules/config/config.module";
 import { DatabaseModule } from "./modules/database/database.module";
 import { HealthModule } from "./modules/health/health.module";
@@ -18,6 +19,7 @@ import { RulesEngineModule } from "./modules/rules-engine/rules-engine.module";
     EmailParserModule,
     NormalizationModule,
     RulesEngineModule,
+    ClassificationModule,
   ],
 })
 export class AppModule {}

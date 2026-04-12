@@ -89,9 +89,31 @@ model NormalizedEmail {
   ruleReasons    String[]
 
   parsedEmail     ParsedEmail @relation(fields: [parsedEmailId], references: [id], onDelete: Cascade)
+  classification  EmailClassification?
 
   @@index([ruleCategory])
   @@index([ruleConfidence])
+}
+
+model EmailClassification {
+  id                   String    @id @default(cuid())
+  normalizedEmailId    String    @unique
+  category             String
+  importance           String
+  urgency              String
+  recommendedAction    String
+  confidence           String
+  needsReview          Boolean   @default(true)
+  reason               String
+  rawResponse          String?
+  classificationError  String?
+  createdAt            DateTime  @default(now())
+
+  normalizedEmail      NormalizedEmail @relation(fields: [normalizedEmailId], references: [id], onDelete: Cascade)
+
+  @@index([category])
+  @@index([needsReview])
+  @@index([createdAt])
 }
 
 model EmailMessage {

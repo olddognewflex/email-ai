@@ -1,131 +1,142 @@
 # AGENTS.md
 
 ## Project
-Email AI Cleanup System
 
-## Purpose
-Build a self-hosted-friendly AI email triage and cleanup system for IMAP mailboxes.
+Email AI Cleanup System — Self-hosted AI email triage for IMAP mailboxes.
 
-Primary goals:
-- ingest emails safely from IMAP accounts
-- normalize and classify messages
-- suggest or apply safe cleanup actions
-- generate digests for Obsidian
-- expose future MCP tools
+## Quick Commands
 
-Secondary goals:
-- build a maintainable NestJS modular monolith
-- keep AI behavior explainable and auditable
+```bash
+# Setup (after git clone)
+pnpm install
+cp .env.example .env  # Edit: set ENCRYPTION_KEY via openssl rand -hex 32
+docker compose up -d
+pnpm --filter @email-ai/api db:migrate
+pnpm --filter @email-ai/api db:generate
 
-## Tech Stack
-- NestJS
-- TypeScript
-- Prisma
-- PostgreSQL
-- imapflow
-- Zod
-- pnpm workspace
+# Development
+pnpm --filter @email-ai/api start:dev     # API watch mode
+pnpm build                                  # Build all packages
+pnpm test                                   # All tests
+pnpm typecheck                              # Type check all packages
 
-## Architecture Style
-Use a modular monolith.
-Do not introduce microservices unless explicitly requested.
-Do not split into multiple deployable services during MVP.
+# Verification
+curl http://localhost:3000/health
+```
 
-## Repo Structure
-- apps/api = main NestJS application
-- apps/mcp-server = MCP tool server
-- packages/shared = shared types, schemas, constants, utils
-- packages/prompts = LLM prompt builders
-- packages/mail-client = IMAP abstractions
-- prisma = database schema and migrations
+## Workspace Structure
 
-## Required Design Principles
-- Rules before LLM when possible
-- Strong typing everywhere
-- Validate all LLM outputs with Zod
-- Prefer simple, boring implementations over clever abstractions
-- Keep modules cohesive and small
-- Every mailbox-changing action must be auditable
-- Default to dry-run mode unless explicitly changed
-- Prefer review queue over automatic mailbox mutation when uncertain
+```
+apps/api                    NestJS application (main entry)
+apps/api/prisma/            Database schema + migrations
+packages/shared             Zod schemas + TypeScript types
+packages/mail-client        IMAP client abstractions
+packages/prompts            (reserved) LLM prompt builders
+```
 
-## Safety Rules
+## Module Conventions
+
+**Location**: `apps/api/src/modules/{kebab-case}/`
+
+**Required files**:
+
+- `{name}.module.ts` — NestJS module definition
+- `{name}.service.ts` — Business logic
+- `{name}.controller.ts` — API endpoints (only if exposing HTTP)
+
+**Optional files**:
+
+- `{name}.spec.ts` — Unit tests (colocated with service)
+- `{name}.types.ts` — Module-specific types
+- `dto/*.dto.ts` — Request/response DTOs
+- `README.md` — Module documentation
+
+**Pattern example**: `email-accounts/email-accounts.service.ts`
+
+## Database Access Pattern
+
+Prisma is wrapped in a custom `DatabaseService` (extends PrismaClient). Inject it:
+
+```typescript
+constructor(private db: DatabaseService) {}
+
+// Usage
+await this.db.emailAccount.findMany()
+```
+
+**Prisma commands** (run from `apps/api`):
+
+- `pnpm db:generate` — Generate Prisma client
+- `pnpm db:migrate` — Create/run migrations
+- `pnpm db:push` — Prototype schema changes (dev only)
+- `pnpm db:studio` — Open Prisma Studio GUI
+
+Schema location: `apps/api/prisma/schema.prisma`
+
+## Shared Package Pattern
+
+**Schemas** (`packages/shared/src/schemas/`):
+
+- PascalCase names ending in `Schema`: `EmailAddressSchema`
+- Export as const + type: `export const EmailAddressSchema = z.object(...)`
+
+**Types** (`packages/shared/src/types/`):
+
+- Infer from schemas: `export type EmailAddress = z.infer<typeof EmailAddressSchema>`
+- camelCase names
+
+**Export** from `packages/shared/src/index.ts` via `export * from './schemas/...'`
+
+## Build Order Dependency
+
+`@email-ai/shared` must build before `@email-ai/api`. The root `build` script handles this:
+
+```json
+"build": "pnpm --filter @email-ai/shared build && pnpm --filter @email-ai/api build"
+```
+
+## Testing
+
+- Unit tests only: `*.spec.ts` files colocated with source
+- No e2e tests currently configured
+- Test command: `pnpm --filter @email-ai/api test`
+- Coverage: `pnpm --filter @email-ai/api test:cov`
+
+## Safety Constraints
+
 - Never auto-delete emails
-- Never implement reply sending unless explicitly requested
+- Never send replies unless explicitly requested
 - Never silently mutate mailbox state
-- Never bypass audit logging for mailbox actions
-- Never store raw secrets in code or committed files
-- Do not assume an AI classification is safe to act on without thresholds and review logic
+- Always default to dry-run mode for sync operations
+- Always validate LLM outputs with Zod before acting
+- All mailbox actions must be auditable
 
-## NestJS Guidance
-- Use modules only where they represent real domain boundaries
-- Avoid excessive boilerplate and fake abstraction
-- Use providers/services for real reusable behavior
-- Do not add controllers for things not exposed as endpoints
-- Keep cron/scheduler logic in dedicated services
-- Keep IMAP access isolated behind mail client abstractions
+## Environment Requirements
 
-## Initial Domain Modules
-- config
-- database
-- health
-- email-accounts
-- email-sync
-- email-parser
-- normalization
-- rules-engine
-- classification
-- review-queue
-- actions
-- digest
-- obsidian-export
-- audit
+- Node.js >= 22
+- pnpm >= 9 (enforced via `packageManager` field)
+- PostgreSQL 16 (via Docker Compose for local dev)
+- `ENCRYPTION_KEY` required for IMAP password encryption
 
-## Build Order
-1. Workspace and NestJS app scaffolding
-2. Prisma schema and database integration
-3. Email account configuration
-4. IMAP sync and message persistence
-5. Parsing and normalization
-6. Rules engine
-7. LLM classification with strict validation
-8. Review queue endpoints
-9. Safe action executor
-10. Digest generation
-11. Obsidian export
-12. MCP server
+## Key Dependencies
 
-## Definition of Done
-A task is only complete if it includes:
-- implementation
-- any needed types/schemas
-- minimal tests where logic is non-trivial
-- docs or README updates if setup/use changed
-- verification steps or commands
+- NestJS 11.x with @nestjs/config
+- Prisma 6.x with @prisma/client
+- imapflow for IMAP connections
+- mailparser for email parsing
+- Zod for validation
 
-## Code Quality Rules
-- No dead scaffolding
-- No speculative abstractions
-- No massive service files
-- No magic constants without names
-- No hidden side effects
-- Prefer explicit naming over clever naming
+## API Conventions
 
-## Expected Agent Behavior
-Before implementing:
-- read AGENTS.md
-- inspect current repo structure
-- explain intended file changes
-- keep scope tight
+- Health endpoint: `GET /health`
+- Dry-run default: `POST /email-sync/:id/run?dryRun=true`
+- Module paths use kebab-case matching directory names
 
-When implementing:
-- change only what is necessary
-- explain tradeoffs
-- call out risks and unknowns
-- prefer incremental delivery
+## When Adding New Modules
 
-When reviewing:
-- look for overengineering
-- look for unsafe mailbox mutation
-- look for unvalidated AI output
-- look for excessive NestJS ceremony
+1. Create directory under `apps/api/src/modules/{kebab-case}/`
+2. Add `{name}.module.ts` with `@Module()` decorator
+3. Export from `app.module.ts` imports array
+4. Follow existing service/controller naming patterns
+5. Add Prisma models to `schema.prisma` if needed
+6. Run `pnpm db:generate` after schema changes
