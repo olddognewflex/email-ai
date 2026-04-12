@@ -110,10 +110,29 @@ model EmailClassification {
   createdAt            DateTime  @default(now())
 
   normalizedEmail      NormalizedEmail @relation(fields: [normalizedEmailId], references: [id], onDelete: Cascade)
+  reviewDecision       ReviewDecision?
 
   @@index([category])
   @@index([needsReview])
+  @@index([confidence])
   @@index([createdAt])
+}
+
+model ReviewDecision {
+  id                String            @id @default(cuid())
+  classificationId  String            @unique
+  decision          ReviewDecisionType
+  decidedAt         DateTime          @default(now())
+
+  classification    EmailClassification @relation(fields: [classificationId], references: [id], onDelete: Cascade)
+
+  @@index([decision])
+  @@index([decidedAt])
+}
+
+enum ReviewDecisionType {
+  approved
+  rejected
 }
 
 model EmailMessage {

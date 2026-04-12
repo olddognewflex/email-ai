@@ -8,6 +8,7 @@ import { EmailSyncModule } from "./modules/email-sync/email-sync.module";
 import { EmailParserModule } from "./modules/email-parser/email-parser.module";
 import { NormalizationModule } from "./modules/normalization/normalization.module";
 import { RulesEngineModule } from "./modules/rules-engine/rules-engine.module";
+import { ReviewQueueModule } from "./modules/review-queue/review-queue.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { RulesEngineModule } from "./modules/rules-engine/rules-engine.module";
     NormalizationModule,
     RulesEngineModule,
     ClassificationModule,
+    ReviewQueueModule,
   ],
 })
 export class AppModule {}
