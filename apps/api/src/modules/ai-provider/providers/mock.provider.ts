@@ -1,15 +1,9 @@
-export interface LlmResponse {
-  content: string;
-  error?: string;
-}
+import { LlmRequest, LlmResponse } from "@email-ai/shared";
+import { BaseLlmProvider } from "./base.provider";
 
-export interface LlmProvider {
-  complete(prompt: string): Promise<LlmResponse>;
-}
-
-export class MockLlmProvider implements LlmProvider {
-  async complete(prompt: string): Promise<LlmResponse> {
-    const lowerPrompt = prompt.toLowerCase();
+export class MockLlmProvider implements BaseLlmProvider {
+  async complete(request: LlmRequest): Promise<LlmResponse> {
+    const lowerPrompt = request.prompt.toLowerCase();
 
     if (
       lowerPrompt.includes("receipt") ||

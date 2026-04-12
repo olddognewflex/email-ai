@@ -78,6 +78,12 @@ pnpm --filter @email-ai/api test:cov
 | POST   | /normalization/reprocess        | Reprocess all already-normalized emails        |
 | POST   | /classification/run             | Classify all unclassified normalized emails    |
 | POST   | /classification/:id/classify    | Classify a single normalized email             |
+| GET    | /ai-providers                   | List AI provider configurations                |
+| GET    | /ai-providers/available         | List available AI provider types               |
+| POST   | /ai-providers                   | Create AI provider configuration               |
+| PUT    | /ai-providers/:id               | Update AI provider configuration               |
+| POST   | /ai-providers/:id/activate      | Set active AI provider                         |
+| DELETE | /ai-providers/:id               | Delete AI provider configuration               |
 | GET    | /review-queue                   | List classifications pending review            |
 | POST   | /review-queue/:id/approve       | Approve a classification                       |
 | POST   | /review-queue/:id/reject        | Reject a classification                        |
@@ -121,10 +127,109 @@ Output file: `email-digest-YYYY-MM-DD.md` with idempotent filenames (same date =
 
 See [Digest Module README](apps/api/src/modules/digest/README.md) for full documentation.
 
+## AI Provider Configuration
+
+Configure AI providers for email classification. Supports OpenAI, Anthropic (Claude), Mistral, Google (Gemini), Kimi, and DeepSeek.
+
+### Supported Providers
+
+| Provider  | Type        | Default Model        | Notes                                       |
+| --------- | ----------- | -------------------- | ------------------------------------------- |
+| OpenAI    | `openai`    | gpt-4o               | Requires API key from platform.openai.com   |
+| Anthropic | `anthropic` | claude-3-5-sonnet    | Requires API key from console.anthropic.com |
+| Mistral   | `mistral`   | mistral-large-latest | Requires API key from console.mistral.ai    |
+| Google    | `google`    | gemini-1.5-flash     | Requires API key from ai.google.dev         |
+| Kimi      | `kimi`      | kimi-k2              | Chinese provider, requires custom endpoint  |
+| DeepSeek  | `deepseek`  | deepseek-chat        | Requires custom endpoint                    |
+| Mock      | `mock`      | mock                 | For testing, no API key needed              |
+
+### Setup Steps
+
+1. **Create a provider configuration:**
+
+```bash
+curl -X POST http://localhost:3000/ai-providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "apiKey": "sk-...",
+    "model": "gpt-4o",
+    "temperature": 0.3,
+    "maxTokens": 1000
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "cl...",
+  "provider": "openai",
+  "model": "gpt-4o",
+  "temperature": 0.3,
+  "maxTokens": 1000,
+  "isActive": false,
+  "isEnabled": true,
+  "createdAt": "2025-01-15T10:30:00.000Z",
+  "updatedAt": "2025-01-15T10:30:00.000Z"
+}
+```
+
+2. **Activate the provider:**
+
+```bash
+curl -X POST http://localhost:3000/ai-providers/{id}/activate
+```
+
+3. **List available providers:**
+
+```bash
+curl http://localhost:3000/ai-providers/available
+```
+
+4. **Update configuration:**
+
+```bash
+curl -X PUT http://localhost:3000/ai-providers/{id} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "temperature": 0.2
+  }'
+```
+
+5. **Delete configuration:**
+
+```bash
+curl -X DELETE http://localhost:3000/ai-providers/{id}
+```
+
+### Configuration with Custom Endpoints
+
+For providers like Kimi or DeepSeek that require custom endpoints:
+
+```bash
+curl -X POST http://localhost:3000/ai-providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "kimi",
+    "apiKey": "your-kimi-api-key",
+    "apiEndpoint": "https://api.moonshot.cn/v1",
+    "model": "kimi-k2",
+    "temperature": 0.3,
+    "maxTokens": 1000
+  }'
+```
+
+### Fallback Behavior
+
+If no AI provider is configured or the active provider fails, the system automatically falls back to the Mock provider for testing. The Mock provider returns keyword-based classifications without making external API calls.
+
 ## Workspace structure
 
 ```
-apps/api           NestJS application
-apps/api/prisma/   Database schema and migrations
-packages/shared    Shared Zod schemas and TypeScript types
+apps/api                          NestJS application
+apps/api/prisma/                  Database schema and migrations
+apps/api/src/modules/ai-provider/ AI provider configuration and adapters
+packages/shared                   Shared Zod schemas and TypeScript types
 ```

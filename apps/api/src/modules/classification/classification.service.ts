@@ -5,18 +5,19 @@ import {
   EmailClassificationInput,
   EmailClassificationOutput,
   EmailClassificationOutputSchema,
+  LlmRequest,
 } from "@email-ai/shared";
 import { buildClassificationPrompt } from "./classification.prompt";
-import { LlmProvider, MockLlmProvider } from "./llm.provider";
+import { AiProviderService } from "../ai-provider/ai-provider.service";
 
 @Injectable()
 export class ClassificationService {
   private readonly logger = new Logger(ClassificationService.name);
-  private readonly llmProvider: LlmProvider;
 
-  constructor(private readonly db: DatabaseService) {
-    this.llmProvider = new MockLlmProvider();
-  }
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly aiProviderService: AiProviderService,
+  ) {}
 
   async classifyEmail(normalizedEmailId: string): Promise<EmailClassification> {
     const normalized = await this.db.normalizedEmail.findUnique({
@@ -43,7 +44,13 @@ export class ClassificationService {
     let output: EmailClassificationOutput;
 
     try {
-      const response = await this.llmProvider.complete(prompt);
+      const request: LlmRequest = {
+        prompt,
+        temperature: 0.3,
+        maxTokens: 1000,
+      };
+
+      const response = await this.aiProviderService.complete(request);
       rawResponse = response.content;
 
       if (response.error) {

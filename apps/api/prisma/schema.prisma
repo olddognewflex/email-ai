@@ -130,9 +130,22 @@ model ReviewDecision {
   @@index([decidedAt])
 }
 
-enum ReviewDecisionType {
-  approved
-  rejected
+model AiProviderConfig {
+  id            String   @id @default(cuid())
+  provider      String
+  apiKey        String
+  apiEndpoint   String?
+  model         String
+  temperature   Float    @default(0.3)
+  maxTokens     Int      @default(1000)
+  isActive      Boolean  @default(false)
+  isEnabled     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([provider])
+  @@index([isActive])
+  @@index([isEnabled])
 }
 
 model EmailMessage {
@@ -154,6 +167,11 @@ model EmailMessage {
 
   @@unique([accountId, mailbox, uid])
   @@index([accountId, date])
+}
+
+enum ReviewDecisionType {
+  approved
+  rejected
 }
 
 enum SyncStatus {

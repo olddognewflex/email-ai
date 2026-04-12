@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AiProviderModule } from "./modules/ai-provider/ai-provider.module";
 import { ClassificationModule } from "./modules/classification/classification.module";
 import { ConfigModule } from "./modules/config/config.module";
 import { DatabaseModule } from "./modules/database/database.module";
@@ -22,6 +23,7 @@ import { ReviewQueueModule } from "./modules/review-queue/review-queue.module";
     NormalizationModule,
     RulesEngineModule,
     ClassificationModule,
+    AiProviderModule,
     ReviewQueueModule,
     DigestModule,
   ],
