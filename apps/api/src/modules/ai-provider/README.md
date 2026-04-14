@@ -63,6 +63,40 @@ curl http://localhost:3000/ai-providers/available
 | POST   | `/ai-providers/:id/activate` | Set as active provider        |
 | DELETE | `/ai-providers/:id`          | Delete provider config        |
 
+## Rate Limiting
+
+The AI provider service implements automatic rate limiting and retry logic to prevent 429 errors from API providers.
+
+### Default Limits
+
+- **Requests per minute**: 20 (configurable)
+- **Max retries**: 3 with exponential backoff
+- **Base delay**: 1000ms
+- **Max delay**: 60000ms
+
+### Retry Logic
+
+When a rate limit error (429) is encountered:
+
+1. If the API returns a `retry-after` value, wait for that duration plus a 100ms buffer
+2. Otherwise, use exponential backoff with 30% jitter:
+   - Retry 1: ~1000ms delay
+   - Retry 2: ~2000ms delay
+   - Retry 3: ~4000ms delay
+
+### Provider-Specific Limits
+
+| Provider  | Typical TPM Limit | Recommended RPM |
+| --------- | ----------------- | --------------- |
+| OpenAI    | 30,000 TPM        | 20-30           |
+| Anthropic | 40,000 TPM        | 30-40           |
+| Mistral   | Varies by tier    | 20-60           |
+| Google    | 60,000 TPM        | 40-60           |
+| Kimi      | Varies            | 20-30           |
+| DeepSeek  | Varies            | 20-30           |
+
+To adjust rate limits for your provider, modify the `RateLimiterConfig` in `ai-provider.service.ts`.
+
 ## Fallback Behavior
 
 If no provider is configured or the active provider fails, the system falls back to the Mock provider which returns keyword-based classifications for testing.

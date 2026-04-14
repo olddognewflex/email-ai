@@ -19,13 +19,27 @@ import {
   KimiProvider,
   DeepSeekProvider,
 } from "./providers";
+import {
+  RateLimiter,
+  RateLimiterConfig,
+  parseRetryAfter,
+} from "./rate-limiter";
 
 @Injectable()
 export class AiProviderService {
   private readonly logger = new Logger(AiProviderService.name);
   private providerInstances: Map<string, BaseLlmProvider> = new Map();
+  private rateLimiter: RateLimiter;
 
-  constructor(private readonly db: DatabaseService) {}
+  constructor(private readonly db: DatabaseService) {
+    const config: RateLimiterConfig = {
+      requestsPerMinute: 20,
+      maxRetries: 3,
+      baseDelayMs: 1000,
+      maxDelayMs: 60000,
+    };
+    this.rateLimiter = new RateLimiter(config);
+  }
 
   async getAllConfigs(): Promise<AiProviderConfig[]> {
     const configs = await this.db.aiProviderConfig.findMany({
@@ -140,7 +154,10 @@ export class AiProviderService {
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
     const provider = await this.getProviderInstance();
-    return provider.complete(request);
+    return this.rateLimiter.execute(
+      () => provider.complete(request),
+      parseRetryAfter,
+    );
   }
 
   private async getProviderInstance(): Promise<BaseLlmProvider> {

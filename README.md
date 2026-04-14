@@ -221,6 +221,12 @@ curl -X POST http://localhost:3000/ai-providers \
   }'
 ```
 
+### Rate Limiting
+
+The AI provider service includes automatic rate limiting and exponential backoff to prevent 429 errors from API providers. By default, it limits requests to 20 per minute with 3 retries and exponential backoff.
+
+See the [AI Provider README](apps/api/src/modules/ai-provider/README.md) for details on configuring rate limits for your specific provider.
+
 ### Fallback Behavior
 
 If no AI provider is configured or the active provider fails, the system automatically falls back to the Mock provider for testing. The Mock provider returns keyword-based classifications without making external API calls.
