@@ -45,10 +45,12 @@ export class ClassificationService {
     let providerUsed: string | null = null;
 
     try {
+      // Reasoning models spend hidden thinking tokens from the same
+      // budget; too low a cap truncates the visible JSON mid-string.
       const request: LlmRequest = {
         prompt,
         temperature: 0.3,
-        maxTokens: 1000,
+        maxTokens: Number(process.env.AI_MAX_TOKENS) || 4000,
       };
 
       providerUsed = await this.aiProviderService.getActiveProviderType();
