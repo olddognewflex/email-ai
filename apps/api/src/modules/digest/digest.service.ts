@@ -62,9 +62,7 @@ export class DigestService {
   ): Promise<DailyDigest> {
     const { date = new Date() } = options;
 
-    this.logger.log(
-      `Generating digest for ${date.toISOString().split("T")[0]}`,
-    );
+    this.logger.log(`Generating digest for ${this.formatLocalDate(date)}`);
 
     // Get start and end of the specified date
     const startOfDay = new Date(date);
@@ -116,7 +114,7 @@ export class DigestService {
     const grouped = this.groupEmailsByActionability(classifications);
 
     const digest: DailyDigest = {
-      date: startOfDay.toISOString().split("T")[0],
+      date: this.formatLocalDate(startOfDay),
       generatedAt: new Date().toISOString(),
       actionable: {
         emails: grouped.actionable,
@@ -337,6 +335,17 @@ export class DigestService {
   /**
    * Format a single email as a markdown bullet point.
    */
+  /**
+   * Format a date as YYYY-MM-DD in local time. toISOString() shifts
+   * to UTC, which moves local midnight onto the wrong calendar day.
+   */
+  private formatLocalDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
   private formatEmailLine(email: DigestEmail): string {
     const from = email.fromName || email.fromAddress || "Unknown sender";
     const subject = email.subject || "(No subject)";
@@ -358,15 +367,15 @@ export class DigestService {
   async generateAndSaveDigest(
     options: GenerateDigestOptions & { outputPath: string },
   ): Promise<{ digest: DailyDigest; filePath: string }> {
-    const { outputPath, date = new Date() } = options;
+    const { outputPath } = options;
 
     // Generate digest
     const digest = await this.generateDigest(options);
     const markdown = this.generateMarkdown(digest);
 
-    // Create idempotent filename based on date
-    const dateStr = date.toISOString().split("T")[0];
-    const fileName = `email-digest-${dateStr}.md`;
+    // Idempotent filename from the digest's own date so the file
+    // name always matches the header and the query window
+    const fileName = `email-digest-${digest.date}.md`;
     const filePath = `${outputPath}/${fileName}`;
 
     // Write to file system (using Node.js fs)

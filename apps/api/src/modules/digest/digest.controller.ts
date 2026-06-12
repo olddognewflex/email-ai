@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -8,6 +9,32 @@ import {
 } from "@nestjs/common";
 import { DigestService, DailyDigest } from "./digest.service";
 import { GenerateDigestDto } from "./dto/generate-digest.dto";
+
+/**
+ * Parse YYYY-MM-DD as a LOCAL date. new Date("YYYY-MM-DD") parses as
+ * UTC midnight, which lands on the previous local calendar day in
+ * timezones behind UTC and silently shifts the digest window.
+ */
+function parseLocalDate(dateStr?: string): Date {
+  if (!dateStr) {
+    return new Date();
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match) {
+    throw new BadRequestException(
+      `Invalid date: ${dateStr} (expected YYYY-MM-DD)`,
+    );
+  }
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  if (isNaN(date.getTime())) {
+    throw new BadRequestException(`Invalid date: ${dateStr}`);
+  }
+  return date;
+}
 
 @Controller("digest")
 export class DigestController {
@@ -21,7 +48,7 @@ export class DigestController {
   async getDigest(
     @Query("date") dateStr?: string,
   ): Promise<{ success: boolean; data: DailyDigest }> {
-    const date = dateStr ? new Date(dateStr) : new Date();
+    const date = parseLocalDate(dateStr);
     const digest = await this.digestService.generateDigest({ date });
 
     return {
@@ -42,7 +69,7 @@ export class DigestController {
     data: { filePath: string; digest: DailyDigest };
     message: string;
   }> {
-    const date = dto.date ? new Date(dto.date) : new Date();
+    const date = parseLocalDate(dto.date);
     const { digest, filePath } = await this.digestService.generateAndSaveDigest(
       {
         date,
