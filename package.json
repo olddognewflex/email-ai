@@ -6,7 +6,7 @@
     "node": ">=22",
     "pnpm": ">=9"
   },
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@11.5.3",
   "scripts": {
     "build": "pnpm --filter @email-ai/shared build && pnpm --filter @email-ai/api build",
     "test": "pnpm -r run test",
@@ -17,10 +17,5 @@
     "@types/node": "^22.0.0",
     "prettier": "^3.0.0",
     "typescript": "^5.5.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "@nestjs/core": "^11.0.0"
-    }
   }
 }
