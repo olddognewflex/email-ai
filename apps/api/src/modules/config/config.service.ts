@@ -18,6 +18,25 @@ export class AppConfigService {
     return this.config.get('ENCRYPTION_KEY', { infer: true });
   }
 
+  get googleClientId(): string | undefined {
+    return this.config.get('GOOGLE_CLIENT_ID', { infer: true });
+  }
+
+  get googleClientSecret(): string | undefined {
+    return this.config.get('GOOGLE_CLIENT_SECRET', { infer: true });
+  }
+
+  get googleRedirectUri(): string {
+    return (
+      this.config.get('GOOGLE_REDIRECT_URI', { infer: true }) ??
+      `http://localhost:${this.port}/email-accounts/oauth/google/callback`
+    );
+  }
+
+  get isGoogleOAuthConfigured(): boolean {
+    return Boolean(this.googleClientId && this.googleClientSecret);
+  }
+
   get nodeEnv(): string {
     return this.config.get('NODE_ENV', { infer: true });
   }

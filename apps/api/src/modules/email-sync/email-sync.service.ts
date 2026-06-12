@@ -10,7 +10,6 @@ import { ImapFlow } from 'imapflow';
 import { DatabaseService } from '../database/database.service';
 import { AppConfigService } from '../config/config.service';
 import { EmailAccountsService } from '../email-accounts/email-accounts.service';
-import { decrypt } from '../../common/crypto.util';
 import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MAILBOX,
@@ -44,7 +43,14 @@ export class EmailSyncService implements OnModuleDestroy {
       throw new BadRequestException(`EmailAccount ${accountId} is inactive`);
     }
 
-    const password = await this.emailAccounts.getDecryptedPassword(accountId);
+    if (account.needsReauth) {
+      throw new BadRequestException(
+        `EmailAccount ${accountId} needs re-authorization. ` +
+          `Re-connect via POST /email-accounts/oauth/google/start with accountId.`,
+      );
+    }
+
+    const credentials = await this.emailAccounts.getImapCredentials(accountId);
 
     const syncState = await this.db.syncState.upsert({
       where: { accountId_mailbox: { accountId, mailbox } },
@@ -61,7 +67,10 @@ export class EmailSyncService implements OnModuleDestroy {
       host: account.host,
       port: account.port,
       secure: account.secure,
-      auth: { user: account.username, pass: password },
+      auth:
+        credentials.kind === 'oauth'
+          ? { user: account.username, accessToken: credentials.accessToken }
+          : { user: account.username, pass: credentials.password },
       logger: false,
     });
 

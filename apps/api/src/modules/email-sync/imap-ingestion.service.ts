@@ -53,7 +53,15 @@ export class ImapIngestionService {
       throw new BadRequestException(`EmailAccount ${accountId} is inactive`);
     }
 
-    const password = await this.emailAccounts.getDecryptedPassword(accountId);
+    if (account.needsReauth) {
+      throw new BadRequestException(
+        `EmailAccount ${accountId} needs re-authorization. ` +
+          `Re-connect via POST /email-accounts/oauth/google/start with accountId.`,
+      );
+    }
+
+    const credentials =
+      await this.emailAccounts.getImapCredentials(accountId);
 
     const syncState = await this.db.syncState.upsert({
       where: { accountId_mailbox: { accountId, mailbox } },
@@ -75,8 +83,10 @@ export class ImapIngestionService {
       host: account.host,
       port: account.port,
       username: account.username,
-      password,
       secure: account.secure,
+      ...(credentials.kind === "oauth"
+        ? { accessToken: credentials.accessToken }
+        : { password: credentials.password }),
     });
 
     let fetchedCount = 0;

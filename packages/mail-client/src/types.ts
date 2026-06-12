@@ -2,7 +2,10 @@ export interface MailClientConfig {
   host: string;
   port: number;
   username: string;
-  password: string;
+  /** Password for plain LOGIN auth. Either this or accessToken is required. */
+  password?: string;
+  /** OAuth2 access token for XOAUTH2 auth. Takes precedence over password. */
+  accessToken?: string;
   secure?: boolean;
 }
 

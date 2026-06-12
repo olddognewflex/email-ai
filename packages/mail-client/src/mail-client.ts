@@ -24,14 +24,19 @@ export class MailClient {
    * Connect to the IMAP server.
    */
   async connect(): Promise<void> {
+    if (!this.config.accessToken && !this.config.password) {
+      throw new Error(
+        "MailClientConfig requires either password or accessToken",
+      );
+    }
+
     this.client = new ImapFlow({
       host: this.config.host,
       port: this.config.port,
       secure: this.config.secure ?? true,
-      auth: {
-        user: this.config.username,
-        pass: this.config.password,
-      },
+      auth: this.config.accessToken
+        ? { user: this.config.username, accessToken: this.config.accessToken }
+        : { user: this.config.username, pass: this.config.password },
       logger: false,
     });
 
