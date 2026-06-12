@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Header,
@@ -9,6 +10,7 @@ import {
   DefaultValuePipe,
   Logger,
 } from "@nestjs/common";
+import { EmailCategorySchema } from "@email-ai/shared";
 import { ReviewQueueService } from "./review-queue.service";
 
 @Controller("review-queue")
@@ -83,7 +85,46 @@ export class ReviewQueueController {
   async rejectViaLink(@Param("id") id: string): Promise<string> {
     this.logger.log(`Rejecting classification ${id} (via link)`);
     await this.reviewQueueService.rejectClassification(id);
-    return this.decisionPage("✗ Rejected", id);
+
+    // Rejection is recorded; closing the tab here is fine. Picking a
+    // category upgrades the rejection with a human override.
+    const buttons = EmailCategorySchema.options
+      .map(
+        (category) =>
+          `<a href="/review-queue/${id}/recategorize?category=${category}"
+              style="display: inline-block; margin: 0.25rem; padding: 0.5rem 1rem;
+                     border: 1px solid #888; border-radius: 6px;
+                     text-decoration: none; color: inherit">${category}</a>`,
+      )
+      .join("\n");
+
+    return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>✗ Rejected</title></head>
+<body style="font-family: system-ui; text-align: center; margin-top: 4rem">
+<h1>✗ Rejected</h1>
+<p>Classification <code>${id}</code></p>
+<p><strong>What should it have been?</strong> (optional — pick to store a correction)</p>
+<p style="max-width: 32rem; margin: 1rem auto">${buttons}</p>
+<p>Or just close this tab to leave it as rejected.</p>
+</body></html>`;
+  }
+
+  @Get(":id/recategorize")
+  @Header("Content-Type", "text/html")
+  async recategorizeViaLink(
+    @Param("id") id: string,
+    @Query("category") category?: string,
+  ): Promise<string> {
+    const parsed = EmailCategorySchema.safeParse(category);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        `Invalid category: ${category}. Valid: ${EmailCategorySchema.options.join(", ")}`,
+      );
+    }
+
+    this.logger.log(`Recategorizing classification ${id} -> ${parsed.data}`);
+    await this.reviewQueueService.recategorizeClassification(id, parsed.data);
+    return this.decisionPage(`✗ Rejected → ${parsed.data}`, id);
   }
 
   private decisionPage(verdict: string, id: string): string {

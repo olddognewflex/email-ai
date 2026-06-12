@@ -123,6 +123,7 @@ model ReviewDecision {
   id                String            @id @default(cuid())
   classificationId  String            @unique
   decision          ReviewDecisionType
+  correctedCategory String?
   decidedAt         DateTime          @default(now())
 
   classification    EmailClassification @relation(fields: [classificationId], references: [id], onDelete: Cascade)

@@ -101,6 +101,7 @@ export class DigestService {
         reviewDecision: {
           select: {
             decision: true,
+            correctedCategory: true,
           },
         },
         normalizedEmail: {
@@ -177,6 +178,7 @@ export class DigestService {
       createdAt: Date;
       reviewDecision: {
         decision: "approved" | "rejected";
+        correctedCategory: string | null;
       } | null;
       normalizedEmail: {
         parsedEmail: {
@@ -205,7 +207,9 @@ export class DigestService {
         fromAddress:
           classification.normalizedEmail?.parsedEmail?.fromAddress ?? null,
         fromName: classification.normalizedEmail?.parsedEmail?.fromName ?? null,
-        category: classification.category as EmailCategory,
+        // Human correction wins over the AI's category
+        category: (classification.reviewDecision?.correctedCategory ??
+          classification.category) as EmailCategory,
         importance: classification.importance as ImportanceLevel,
         urgency: classification.urgency,
         recommendedAction:

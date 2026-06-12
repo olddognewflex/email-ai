@@ -214,4 +214,50 @@ export class ReviewQueueService {
       decidedAt: decision.decidedAt,
     };
   }
+
+  /**
+   * Record a rejection together with the human-corrected category.
+   * The corrected category becomes the effective category downstream
+   * (digest grouping and display).
+   */
+  async recategorizeClassification(
+    classificationId: string,
+    correctedCategory: string,
+  ): Promise<ReviewDecisionResponse & { correctedCategory: string }> {
+    const classification = await this.db.emailClassification.findUnique({
+      where: { id: classificationId },
+      select: { id: true },
+    });
+
+    if (!classification) {
+      throw new NotFoundException(
+        `Classification ${classificationId} not found`,
+      );
+    }
+
+    const decision = await this.db.reviewDecision.upsert({
+      where: { classificationId },
+      create: {
+        classificationId,
+        decision: ReviewDecisionType.rejected,
+        correctedCategory,
+      },
+      update: {
+        decision: ReviewDecisionType.rejected,
+        correctedCategory,
+      },
+    });
+
+    this.logger.log(
+      `Recategorized classification ${classificationId} -> ${correctedCategory}`,
+    );
+
+    return {
+      id: decision.id,
+      classificationId: decision.classificationId,
+      decision: decision.decision,
+      decidedAt: decision.decidedAt,
+      correctedCategory,
+    };
+  }
 }
