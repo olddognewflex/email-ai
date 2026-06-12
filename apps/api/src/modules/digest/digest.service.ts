@@ -368,6 +368,9 @@ export class DigestService {
     ].filter((e) => e.needsReview && !e.reviewDecision);
 
     if (pendingReview.length > 0) {
+      const baseUrl =
+        process.env.DIGEST_LINK_BASE_URL ??
+        `http://localhost:${process.env.PORT ?? 3000}`;
       lines.push("## Needs Review");
       lines.push("");
       lines.push(
@@ -375,8 +378,10 @@ export class DigestService {
       );
       lines.push("");
       for (const email of pendingReview) {
+        const approve = `${baseUrl}/review-queue/${email.id}/approve`;
+        const reject = `${baseUrl}/review-queue/${email.id}/reject`;
         lines.push(
-          `${this.formatEmailLine(email)} — _${email.category}: ${email.reason}_`,
+          `${this.formatEmailLine(email)} — _${email.category}: ${email.reason}_ · [✓ approve](${approve}) · [✗ reject](${reject})`,
         );
       }
       lines.push("");

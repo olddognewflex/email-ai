@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Header,
   Post,
   Param,
   Query,
@@ -63,5 +64,35 @@ export class ReviewQueueController {
       data: result,
       message: "Classification rejected successfully",
     };
+  }
+
+  // GET variants exist so digest markdown links work from Obsidian,
+  // which can only open URLs in a browser (no POST). Side-effectful
+  // GET is acceptable for this single-user localhost tool.
+
+  @Get(":id/approve")
+  @Header("Content-Type", "text/html")
+  async approveViaLink(@Param("id") id: string): Promise<string> {
+    this.logger.log(`Approving classification ${id} (via link)`);
+    await this.reviewQueueService.approveClassification(id);
+    return this.decisionPage("✓ Approved", id);
+  }
+
+  @Get(":id/reject")
+  @Header("Content-Type", "text/html")
+  async rejectViaLink(@Param("id") id: string): Promise<string> {
+    this.logger.log(`Rejecting classification ${id} (via link)`);
+    await this.reviewQueueService.rejectClassification(id);
+    return this.decisionPage("✗ Rejected", id);
+  }
+
+  private decisionPage(verdict: string, id: string): string {
+    return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${verdict}</title></head>
+<body style="font-family: system-ui; text-align: center; margin-top: 4rem">
+<h1>${verdict}</h1>
+<p>Classification <code>${id}</code></p>
+<p>You can close this tab. The change appears in the next digest.</p>
+</body></html>`;
   }
 }
