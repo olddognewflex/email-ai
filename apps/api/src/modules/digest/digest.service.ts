@@ -17,6 +17,7 @@ export interface DigestEmail {
   recommendedAction: RecommendedAction;
   reason: string;
   confidence: string;
+  needsReview: boolean;
   receivedAt: Date;
   reviewDecision?: "approved" | "rejected" | null;
 }
@@ -97,6 +98,11 @@ export class DigestService {
         needsReview: true,
         reason: true,
         createdAt: true,
+        reviewDecision: {
+          select: {
+            decision: true,
+          },
+        },
         normalizedEmail: {
           select: {
             senderDomain: true,
@@ -169,6 +175,9 @@ export class DigestService {
       needsReview: boolean;
       reason: string;
       createdAt: Date;
+      reviewDecision: {
+        decision: "approved" | "rejected";
+      } | null;
       normalizedEmail: {
         parsedEmail: {
           subject: string | null;
@@ -203,10 +212,11 @@ export class DigestService {
           classification.recommendedAction as RecommendedAction,
         reason: classification.reason,
         confidence: classification.confidence,
+        needsReview: classification.needsReview,
         receivedAt:
           classification.normalizedEmail?.parsedEmail?.rawEmail?.internalDate ??
           classification.createdAt,
-        reviewDecision: null,
+        reviewDecision: classification.reviewDecision?.decision ?? null,
       };
 
       const group = this.determineActionabilityGroup(email);
@@ -348,12 +358,33 @@ export class DigestService {
     }
     lines.push("");
 
+    // Needs Review Section — undecided flagged items across all groups.
+    // Items also appear in their group above (marked ⚠); this is the
+    // work-queue view for POST /review-queue/:id/approve|reject.
+    const pendingReview = [
+      ...digest.actionable.emails,
+      ...digest.fyi.emails,
+      ...digest.lowValue.emails,
+    ].filter((e) => e.needsReview && !e.reviewDecision);
+
+    if (pendingReview.length > 0) {
+      lines.push("## Needs Review");
+      lines.push("");
+      lines.push(
+        "*Low-confidence classifications awaiting approval in the review queue.*",
+      );
+      lines.push("");
+      for (const email of pendingReview) {
+        lines.push(
+          `${this.formatEmailLine(email)} — _${email.category}: ${email.reason}_`,
+        );
+      }
+      lines.push("");
+    }
+
     return lines.join("\n");
   }
 
-  /**
-   * Format a single email as a markdown bullet point.
-   */
   /**
    * Format a date as YYYY-MM-DD in local time. toISOString() shifts
    * to UTC, which moves local midnight onto the wrong calendar day.
@@ -368,13 +399,16 @@ export class DigestService {
   private formatEmailLine(email: DigestEmail): string {
     const from = email.fromName || email.fromAddress || "Unknown sender";
     const subject = email.subject || "(No subject)";
+    // ✓/✗ reviewed; ⚠ awaiting review; ? low confidence
     const reviewBadge = email.reviewDecision
       ? email.reviewDecision === "approved"
         ? " ✓"
         : " ✗"
-      : email.confidence === "low"
-        ? " ?"
-        : "";
+      : email.needsReview
+        ? " ⚠"
+        : email.confidence === "low"
+          ? " ?"
+          : "";
 
     return `- **${from}** - ${subject}${reviewBadge}`;
   }
