@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# daily-digest.sh — run the full email-ai pipeline and feed results into qi.
+# daily-digest.sh — run the email-ai pipeline and feed results into qi.
 #
-#   1. Ensure Postgres (docker compose) and the API are running
-#   2. Sync all IMAP accounts, then parse -> normalize -> classify
-#   3. Write the daily digest markdown into the qi vault
-#   4. `qi capture` each actionable email (deduped across runs)
+# Usage: daily-digest.sh [stage]
+#   sync    sync IMAP accounts, parse, normalize, classify
+#   digest  write digest markdown into the qi vault and qi-capture
+#           actionable emails (yesterday's final + today-so-far)
+#   all     both (default)
 #
-# Designed to run unattended from launchd. Safe to re-run: pipeline
-# endpoints only process new records, digest output is idempotent per
-# date, and captures are deduped via a state file.
+# Scheduled via launchd: the hourly job runs "sync" so classification
+# keeps up with incoming mail; the 07:30 job runs "digest". Safe to
+# re-run: pipeline endpoints only process new records, digest output is
+# idempotent per date, and captures are deduped via a state file.
 #
 # Override any of the defaults below via environment variables.
 
@@ -18,6 +20,12 @@ set -euo pipefail
 # launchd starts with a minimal PATH; include mise shims (node), qi,
 # homebrew (jq), and docker.
 export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+STAGE="${1:-all}"
+case "$STAGE" in
+  sync|digest|all) ;;
+  *) echo "Usage: $(basename "$0") [sync|digest|all]" >&2; exit 2 ;;
+esac
 
 REPO_DIR="${EMAIL_AI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 API_URL="${EMAIL_AI_API_URL:-http://localhost:3000}"
@@ -94,9 +102,9 @@ run_pipeline() {
   curl -fsS -X POST "$API_URL/normalization/run" | jq -c '.' \
     | while read -r line; do log "  normalize: $line"; done
 
-  # Classify from yesterday onward: mail that arrived after the previous
-  # run would otherwise fall before today's default cutoff and never get
-  # classified. Already-classified emails are skipped, so overlap is free.
+  # Classify from yesterday onward: covers mail that arrived before
+  # today's default cutoff. Already-classified emails are skipped,
+  # so overlap is free.
   local since
   since=$(date -v-1d '+%Y-%m-%d')
   log "Classifying normalized emails since $since"
@@ -105,18 +113,18 @@ run_pipeline() {
 }
 
 write_digest() {
-  local today
-  today=$(date '+%Y-%m-%d')
-  log "Writing digest for $today to $VAULT_DIGEST_DIR"
+  local day="$1"
+  log "Writing digest for $day to $VAULT_DIGEST_DIR"
   curl -fsS -X POST "$API_URL/digest/generate" \
     -H 'Content-Type: application/json' \
-    -d "{\"outputPath\": \"$VAULT_DIGEST_DIR\", \"date\": \"$today\"}" \
-    | jq -c '.' | while read -r line; do log "  digest: $line"; done
+    -d "{\"outputPath\": \"$VAULT_DIGEST_DIR\", \"date\": \"$day\"}" \
+    | jq -c '.data.digest.summary' | while read -r line; do log "  digest: $line"; done
 }
 
 capture_actionables() {
+  local day="$1"
   local digest captured=0 skipped=0
-  digest=$(curl -fsS "$API_URL/digest")
+  digest=$(curl -fsS "$API_URL/digest?date=$day")
 
   # One line per actionable email: id<TAB>capture text
   while IFS=$'\t' read -r id text; do
@@ -136,12 +144,26 @@ capture_actionables() {
     | [.id, "Email: \(.subject // "(no subject)") — \(.fromName // .fromAddress // "unknown") [\(.recommendedAction)]"]
     | @tsv' <<<"$digest")
 
-  log "Captured $captured actionable emails into qi inbox ($skipped already captured)"
+  log "Captured $captured actionable emails for $day ($skipped already captured)"
 }
 
-log "=== email-ai daily digest run ==="
+run_digest_stage() {
+  # Yesterday's digest is final (all of its mail is classified by now);
+  # today's covers overnight mail and will be regenerated tomorrow.
+  local yesterday today
+  yesterday=$(date -v-1d '+%Y-%m-%d')
+  today=$(date '+%Y-%m-%d')
+  for day in "$yesterday" "$today"; do
+    write_digest "$day"
+    capture_actionables "$day"
+  done
+}
+
+log "=== email-ai run: stage=$STAGE ==="
 ensure_stack
-run_pipeline
-write_digest
-capture_actionables
+case "$STAGE" in
+  sync)   run_pipeline ;;
+  digest) run_digest_stage ;;
+  all)    run_pipeline; run_digest_stage ;;
+esac
 log "=== done ==="

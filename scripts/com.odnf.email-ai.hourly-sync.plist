@@ -3,29 +3,27 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.odnf.email-ai.daily-digest</string>
+    <string>com.odnf.email-ai.hourly-sync</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>/Users/raymonddoran/Development/odnf/email-ai/scripts/daily-digest.sh</string>
-        <string>digest</string>
+        <string>sync</string>
     </array>
 
     <key>StartCalendarInterval</key>
     <dict>
-        <key>Hour</key>
-        <integer>7</integer>
         <key>Minute</key>
-        <integer>30</integer>
+        <integer>0</integer>
     </dict>
 
     <key>RunAtLoad</key>
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/raymonddoran/.local/state/email-ai/daily-digest.log</string>
+    <string>/Users/raymonddoran/.local/state/email-ai/hourly-sync.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/raymonddoran/.local/state/email-ai/daily-digest.log</string>
+    <string>/Users/raymonddoran/.local/state/email-ai/hourly-sync.log</string>
 </dict>
 </plist>

@@ -70,12 +70,21 @@ export class DigestService {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    // Fetch classifications for the date range
+    // Fetch classifications for emails RECEIVED in the date range.
+    // Grouping by received date (not classification date) keeps each
+    // email in its own day's digest regardless of when the hourly
+    // classification job got to it.
     const classifications = await this.db.emailClassification.findMany({
       where: {
-        createdAt: {
-          gte: startOfDay,
-          lte: endOfDay,
+        normalizedEmail: {
+          parsedEmail: {
+            rawEmail: {
+              internalDate: {
+                gte: startOfDay,
+                lte: endOfDay,
+              },
+            },
+          },
         },
       },
       select: {
@@ -96,6 +105,11 @@ export class DigestService {
                 subject: true,
                 fromAddress: true,
                 fromName: true,
+                rawEmail: {
+                  select: {
+                    internalDate: true,
+                  },
+                },
               },
             },
           },
@@ -160,6 +174,9 @@ export class DigestService {
           subject: string | null;
           fromAddress: string | null;
           fromName: string | null;
+          rawEmail: {
+            internalDate: Date;
+          } | null;
         } | null;
       } | null;
     }>,
@@ -186,7 +203,9 @@ export class DigestService {
           classification.recommendedAction as RecommendedAction,
         reason: classification.reason,
         confidence: classification.confidence,
-        receivedAt: classification.createdAt,
+        receivedAt:
+          classification.normalizedEmail?.parsedEmail?.rawEmail?.internalDate ??
+          classification.createdAt,
         reviewDecision: null,
       };
 

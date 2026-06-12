@@ -98,6 +98,8 @@ Pass `dryRun=false` to persist raw emails.
 ## Daily Digest & Obsidian Export
 
 Generate daily email digests grouped by actionability and export to Obsidian-compatible markdown.
+A digest for a date covers emails **received** that day (local time), regardless of when they
+were classified.
 
 ### Digest Grouping
 
