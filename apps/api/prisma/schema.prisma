@@ -107,6 +107,7 @@ model EmailClassification {
   reason               String
   rawResponse          String?
   classificationError  String?
+  providerUsed         String?
   createdAt            DateTime  @default(now())
 
   normalizedEmail      NormalizedEmail @relation(fields: [normalizedEmailId], references: [id], onDelete: Cascade)

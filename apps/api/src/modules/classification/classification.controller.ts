@@ -33,4 +33,9 @@ export class ClassificationController {
       createdAt: result.createdAt,
     };
   }
+
+  @Get("stats")
+  async getStats() {
+    return this.classificationService.getStats();
+  }
 }

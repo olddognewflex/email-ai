@@ -42,6 +42,7 @@ export class ClassificationService {
     let rawResponse: string | null = null;
     let classificationError: string | null = null;
     let output: EmailClassificationOutput;
+    let providerUsed: string | null = null;
 
     try {
       const request: LlmRequest = {
@@ -50,6 +51,7 @@ export class ClassificationService {
         maxTokens: 1000,
       };
 
+      providerUsed = await this.aiProviderService.getActiveProviderType();
       const response = await this.aiProviderService.complete(request);
       rawResponse = response.content;
 
@@ -66,6 +68,7 @@ export class ClassificationService {
       classificationError =
         error instanceof Error ? error.message : "Unknown error";
       output = this.createFallbackOutput();
+      providerUsed = "fallback";
     }
 
     return this.db.emailClassification.upsert({
@@ -81,6 +84,7 @@ export class ClassificationService {
         reason: output.reason,
         rawResponse,
         classificationError,
+        providerUsed,
       },
       update: {
         category: output.category,
@@ -92,6 +96,7 @@ export class ClassificationService {
         reason: output.reason,
         rawResponse,
         classificationError,
+        providerUsed,
       },
     });
   }
@@ -189,5 +194,50 @@ export class ClassificationService {
       needsReview: true,
       reason: "Classification failed - manual review required",
     };
+  }
+
+  async getStats(): Promise<{
+    total: number;
+    byProvider: Record<string, number>;
+    aiClassified: number;
+    fallbackClassified: number;
+    needsReview: number;
+    byCategory: Record<string, number>;
+  }> {
+    const allClassifications = await this.db.emailClassification.findMany({
+      select: {
+        providerUsed: true,
+        category: true,
+        needsReview: true,
+      },
+    });
+
+    const stats = {
+      total: allClassifications.length,
+      byProvider: {} as Record<string, number>,
+      aiClassified: 0,
+      fallbackClassified: 0,
+      needsReview: 0,
+      byCategory: {} as Record<string, number>,
+    };
+
+    for (const c of allClassifications) {
+      const provider = c.providerUsed ?? "unknown";
+      stats.byProvider[provider] = (stats.byProvider[provider] ?? 0) + 1;
+
+      if (c.providerUsed && c.providerUsed !== "fallback") {
+        stats.aiClassified++;
+      } else if (c.providerUsed === "fallback") {
+        stats.fallbackClassified++;
+      }
+
+      if (c.needsReview) {
+        stats.needsReview++;
+      }
+
+      stats.byCategory[c.category] = (stats.byCategory[c.category] ?? 0) + 1;
+    }
+
+    return stats;
   }
 }

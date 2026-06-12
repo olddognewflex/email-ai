@@ -160,6 +160,11 @@ export class AiProviderService {
     );
   }
 
+  async getActiveProviderType(): Promise<string | null> {
+    const config = await this.getActiveConfig();
+    return config?.provider ?? null;
+  }
+
   private async getProviderInstance(): Promise<BaseLlmProvider> {
     const config = await this.getActiveConfig();
 

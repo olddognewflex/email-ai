@@ -78,6 +78,7 @@ pnpm --filter @email-ai/api test:cov
 | POST   | /normalization/reprocess        | Reprocess all already-normalized emails        |
 | POST   | /classification/run             | Classify all unclassified normalized emails    |
 | POST   | /classification/:id/classify    | Classify a single normalized email             |
+| GET    | /classification/stats           | Get classification statistics                  |
 | GET    | /ai-providers                   | List AI provider configurations                |
 | GET    | /ai-providers/available         | List available AI provider types               |
 | POST   | /ai-providers                   | Create AI provider configuration               |
@@ -226,6 +227,36 @@ curl -X POST http://localhost:3000/ai-providers \
 The AI provider service includes automatic rate limiting and exponential backoff to prevent 429 errors from API providers. By default, it limits requests to 20 per minute with 3 retries and exponential backoff.
 
 See the [AI Provider README](apps/api/src/modules/ai-provider/README.md) for details on configuring rate limits for your specific provider.
+
+### Classification Statistics
+
+Track how many emails have been classified and which path was used (AI provider vs fallback):
+
+```bash
+curl http://localhost:3000/classification/stats
+```
+
+Response:
+
+```json
+{
+  "total": 150,
+  "byProvider": {
+    "openai": 120,
+    "fallback": 30
+  },
+  "aiClassified": 120,
+  "fallbackClassified": 30,
+  "needsReview": 15,
+  "byCategory": {
+    "receipt": 45,
+    "newsletter": 35,
+    "personal": 20,
+    "notification": 15,
+    "unknown": 35
+  }
+}
+```
 
 ### Fallback Behavior
 
