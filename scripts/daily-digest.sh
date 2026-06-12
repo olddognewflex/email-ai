@@ -32,7 +32,6 @@ API_URL="${EMAIL_AI_API_URL:-http://localhost:3000}"
 VAULT_DIGEST_DIR="${EMAIL_AI_DIGEST_DIR:-$HOME/Documents/obsidian/Qi/20-notes/email-digests}"
 STATE_DIR="${EMAIL_AI_STATE_DIR:-$HOME/.local/state/email-ai}"
 CAPTURED_IDS_FILE="$STATE_DIR/captured-ids.txt"
-API_PID_FILE="$STATE_DIR/api.pid"
 HEALTH_TIMEOUT="${EMAIL_AI_HEALTH_TIMEOUT:-90}"
 
 mkdir -p "$STATE_DIR" "$VAULT_DIGEST_DIR"
@@ -45,35 +44,24 @@ api_healthy() {
     | jq -e '.status == "ok" and .db == "ok"' >/dev/null 2>&1
 }
 
-STARTED_API=0
-cleanup() {
-  if [ "$STARTED_API" = 1 ] && [ -f "$API_PID_FILE" ]; then
-    log "Stopping API (started by this script)"
-    kill "$(cat "$API_PID_FILE")" 2>/dev/null || true
-    rm -f "$API_PID_FILE"
-  fi
-}
-trap cleanup EXIT
-
+# The API runs as an always-on launchd service (com.odnf.email-ai.api,
+# KeepAlive). This only makes sure Postgres is up — launchd restarts
+# the API until it can reach the database — then waits for health.
 ensure_stack() {
   if api_healthy; then
-    log "API already healthy"
+    log "API healthy"
     return
   fi
 
-  log "Starting Postgres via docker compose"
+  log "API not healthy; ensuring Postgres is up"
   (cd "$REPO_DIR" && docker compose up -d)
-
-  log "Starting API"
-  (cd "$REPO_DIR/apps/api" && nohup node dist/main \
-    >>"$STATE_DIR/api.log" 2>&1 & echo $! >"$API_PID_FILE")
-  STARTED_API=1
 
   local waited=0
   until api_healthy; do
     waited=$((waited + 3))
     if [ "$waited" -ge "$HEALTH_TIMEOUT" ]; then
-      log "ERROR: API not healthy after ${HEALTH_TIMEOUT}s — see $STATE_DIR/api.log"
+      log "ERROR: API not healthy after ${HEALTH_TIMEOUT}s — check" \
+        "launchctl list com.odnf.email-ai.api and $STATE_DIR/api.log"
       exit 1
     fi
     sleep 3
