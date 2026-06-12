@@ -94,8 +94,13 @@ run_pipeline() {
   curl -fsS -X POST "$API_URL/normalization/run" | jq -c '.' \
     | while read -r line; do log "  normalize: $line"; done
 
-  log "Classifying normalized emails"
-  curl -fsS -X POST "$API_URL/classification/run" | jq -c '.' \
+  # Classify from yesterday onward: mail that arrived after the previous
+  # run would otherwise fall before today's default cutoff and never get
+  # classified. Already-classified emails are skipped, so overlap is free.
+  local since
+  since=$(date -v-1d '+%Y-%m-%d')
+  log "Classifying normalized emails since $since"
+  curl -fsS -X POST "$API_URL/classification/run?since=$since" | jq -c '.' \
     | while read -r line; do log "  classify: $line"; done
 }
 
