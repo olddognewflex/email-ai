@@ -76,7 +76,8 @@ pnpm --filter @email-ai/api test:cov
 | POST   | /normalization/run              | Normalize all unparsed emails                  |
 | POST   | /normalization/:id/normalize    | Normalize (or reprocess) a single parsed email |
 | POST   | /normalization/reprocess        | Reprocess all already-normalized emails        |
-| POST   | /classification/run             | Classify all unclassified normalized emails    |
+| POST   | /classification/run             | Classify today's unclassified emails (default) |
+|        |                                 | `?since=YYYY-MM-DD` cutoff, `?all=true` backfill |
 | POST   | /classification/:id/classify    | Classify a single normalized email             |
 | GET    | /classification/stats           | Get classification statistics                  |
 | GET    | /ai-providers                   | List AI provider configurations                |

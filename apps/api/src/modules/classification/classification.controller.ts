@@ -1,4 +1,12 @@
-import { Controller, Post, Param, Get, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { ClassificationService } from "./classification.service";
 
 @Controller("classification")
@@ -8,13 +16,37 @@ export class ClassificationController {
   constructor(private readonly classificationService: ClassificationService) {}
 
   @Post("run")
-  async processAll(): Promise<{
+  async processAll(
+    @Query("since") since?: string,
+    @Query("all") all?: string,
+  ): Promise<{
     processed: number;
     errors: number;
     needsReview: number;
   }> {
-    this.logger.log("Processing all unclassified emails");
-    return this.classificationService.processUnclassified();
+    // Default to today's mail only; backfill is opt-in via ?all=true
+    // or an explicit ?since=YYYY-MM-DD cutoff.
+    let cutoff: Date | undefined;
+    if (all !== "true") {
+      if (since) {
+        cutoff = new Date(since);
+        if (isNaN(cutoff.getTime())) {
+          throw new BadRequestException(
+            `Invalid since date: ${since} (expected YYYY-MM-DD)`,
+          );
+        }
+      } else {
+        cutoff = new Date();
+        cutoff.setHours(0, 0, 0, 0);
+      }
+    }
+
+    this.logger.log(
+      cutoff
+        ? `Processing unclassified emails received since ${cutoff.toISOString()}`
+        : "Processing ALL unclassified emails",
+    );
+    return this.classificationService.processUnclassified(cutoff);
   }
 
   @Post(":id/classify")

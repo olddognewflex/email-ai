@@ -101,13 +101,18 @@ export class ClassificationService {
     });
   }
 
-  async processUnclassified(): Promise<{
+  async processUnclassified(since?: Date): Promise<{
     processed: number;
     errors: number;
     needsReview: number;
   }> {
     const unclassified = await this.db.normalizedEmail.findMany({
-      where: { classification: null },
+      where: {
+        classification: null,
+        ...(since && {
+          parsedEmail: { rawEmail: { internalDate: { gte: since } } },
+        }),
+      },
       select: { id: true },
     });
 
