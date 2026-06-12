@@ -132,7 +132,7 @@ capture_actionables() {
       log "WARNING: qi capture failed for $id"
     fi
   done < <(jq -r '
-    .actionable.emails[]
+    .data.actionable.emails[]
     | [.id, "Email: \(.subject // "(no subject)") — \(.fromName // .fromAddress // "unknown") [\(.recommendedAction)]"]
     | @tsv' <<<"$digest")
 
