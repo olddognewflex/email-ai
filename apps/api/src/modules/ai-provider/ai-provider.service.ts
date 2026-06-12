@@ -33,7 +33,7 @@ export class AiProviderService {
 
   constructor(private readonly db: DatabaseService) {
     const config: RateLimiterConfig = {
-      requestsPerMinute: 20,
+      requestsPerMinute: Number(process.env.AI_REQUESTS_PER_MINUTE) || 20,
       maxRetries: 3,
       baseDelayMs: 1000,
       maxDelayMs: 60000,
