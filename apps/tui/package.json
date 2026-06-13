@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "email-review": "./dist/index.js"
+    "eai": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",

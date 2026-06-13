@@ -2,11 +2,11 @@
 import { render } from "ink";
 import { App } from "./components/App.js";
 import { API_BASE } from "./api.js";
-const USAGE = `email-review — keyboard-driven review of AI email classifications
+const USAGE = `eai — keyboard-driven review of AI email classifications
 Usage:
-  email-review                      open the review queue list
-  email-review <classificationId>   open the detail screen for one item
-  email-review --help               show this help
+  eai                      open the review queue list
+  eai <classificationId>   open the detail screen for one item
+  eai --help               show this help
 Environment:
   PORT   API port (default 3000, current target ${API_BASE})
 Keys (list):    j/k or arrows move · enter open · a approve · r reject · q quit
@@ -21,7 +21,7 @@ if (args.includes("--help") || args.includes("-h")) {
 }
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
   process.stderr.write(
-    "email-review is an interactive TUI — run it in a terminal.\n",
+    "eai is an interactive TUI — run it in a terminal.\n",
   );
   process.exit(1);
 }
