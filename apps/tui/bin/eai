@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# eai — global launcher for the @email-ai/tui review TUI.
+#
+# Mirrors the `tkt` pattern: a thin shim symlinked into ~/.local/bin so the
+# command runs from any directory. Resolves its own location (following the
+# symlink), builds the TUI on first run if dist is missing, then execs it.
+set -euo pipefail
+
+# Resolve this script's real path, following the ~/.local/bin symlink.
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$dir/$src"
+done
+bin_dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+tui_dir="$(cd -P "$bin_dir/.." >/dev/null 2>&1 && pwd)"
+entry="$tui_dir/dist/index.js"
+
+# Build on first run (or after a clean) so the symlink target always exists.
+if [ ! -f "$entry" ]; then
+  echo "email-review: building TUI (first run)…" >&2
+  ( cd "$tui_dir/../.." && pnpm --filter @email-ai/tui build >&2 )
+fi
+
+exec node "$entry" "$@"
