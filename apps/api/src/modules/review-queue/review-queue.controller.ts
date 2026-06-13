@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Header,
@@ -42,6 +43,16 @@ export class ReviewQueueController {
     };
   }
 
+  @Get(":id")
+  async getClassificationDetail(@Param("id") id: string) {
+    const detail = await this.reviewQueueService.getClassificationDetail(id);
+
+    return {
+      success: true,
+      data: detail,
+    };
+  }
+
   @Post(":id/approve")
   async approveClassification(@Param("id") id: string) {
     this.logger.log(`Approving classification ${id}`);
@@ -56,10 +67,30 @@ export class ReviewQueueController {
   }
 
   @Post(":id/reject")
-  async rejectClassification(@Param("id") id: string) {
-    this.logger.log(`Rejecting classification ${id}`);
+  async rejectClassification(
+    @Param("id") id: string,
+    @Body() body?: { correctedCategory?: string },
+  ) {
+    let correctedCategory: string | undefined;
+    if (body?.correctedCategory !== undefined) {
+      const parsed = EmailCategorySchema.safeParse(body.correctedCategory);
+      if (!parsed.success) {
+        throw new BadRequestException(
+          `Invalid correctedCategory: ${body.correctedCategory}. Valid: ${EmailCategorySchema.options.join(", ")}`,
+        );
+      }
+      correctedCategory = parsed.data;
+    }
 
-    const result = await this.reviewQueueService.rejectClassification(id);
+    this.logger.log(
+      `Rejecting classification ${id}` +
+        (correctedCategory ? ` -> ${correctedCategory}` : ""),
+    );
+
+    const result = await this.reviewQueueService.rejectClassification(
+      id,
+      correctedCategory,
+    );
 
     return {
       success: true,

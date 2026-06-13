@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { convert } from "html-to-text";
 import { DatabaseService } from "../database/database.service";
 import { ReviewDecisionType } from "@prisma/client";
 
@@ -39,6 +40,48 @@ export interface ReviewDecisionResponse {
   classificationId: string;
   decision: ReviewDecisionType;
   decidedAt: Date;
+  correctedCategory?: string | null;
+}
+
+export interface ClassificationDetail {
+  id: string;
+  category: string;
+  importance: string;
+  urgency: string;
+  recommendedAction: string;
+  confidence: string;
+  reason: string;
+  needsReview: boolean;
+  providerUsed: string | null;
+  createdAt: Date;
+  reviewDecision: {
+    decision: ReviewDecisionType;
+    correctedCategory: string | null;
+    decidedAt: Date;
+  } | null;
+  rule: {
+    category: string | null;
+    confidence: string | null;
+    reasons: string[];
+  };
+  email: {
+    subject: string | null;
+    fromAddress: string | null;
+    fromName: string | null;
+    toAddresses: unknown;
+    ccAddresses: unknown;
+    date: Date;
+    attachmentCount: number;
+    unsubscribeLink: string | null;
+    senderDomain: string;
+    isNewsletter: boolean;
+    isBulk: boolean;
+    tags: string[];
+  };
+  body: {
+    text: string;
+    html: string | null;
+  };
 }
 
 @Injectable()
@@ -135,6 +178,105 @@ export class ReviewQueueService {
     };
   }
 
+  /**
+   * Full review context for one classification: LLM verdict, prior
+   * review decision, rule-based pre-classification, email metadata,
+   * and body (text falls back to an html-to-text conversion).
+   */
+  async getClassificationDetail(
+    classificationId: string,
+  ): Promise<ClassificationDetail> {
+    const classification = await this.db.emailClassification.findUnique({
+      where: { id: classificationId },
+      include: {
+        reviewDecision: true,
+        normalizedEmail: {
+          include: {
+            parsedEmail: {
+              include: {
+                rawEmail: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!classification) {
+      throw new NotFoundException(
+        `Classification ${classificationId} not found`,
+      );
+    }
+
+    const normalizedEmail = classification.normalizedEmail;
+    const parsedEmail = normalizedEmail.parsedEmail;
+    const rawEmail = parsedEmail.rawEmail;
+
+    const text =
+      parsedEmail.textBody ??
+      (parsedEmail.htmlBody
+        ? convert(parsedEmail.htmlBody, {
+            wordwrap: 100,
+            selectors: [
+              { selector: "img", format: "skip" },
+              {
+                selector: "a",
+                options: { hideLinkHrefIfSameAsText: true },
+              },
+            ],
+          })
+        : "");
+
+    return {
+      id: classification.id,
+      category: classification.category,
+      importance: classification.importance,
+      urgency: classification.urgency,
+      recommendedAction: classification.recommendedAction,
+      confidence: classification.confidence,
+      reason: classification.reason,
+      needsReview: classification.needsReview,
+      providerUsed: classification.providerUsed,
+      createdAt: classification.createdAt,
+      reviewDecision: classification.reviewDecision
+        ? {
+            decision: classification.reviewDecision.decision,
+            correctedCategory: classification.reviewDecision.correctedCategory,
+            decidedAt: classification.reviewDecision.decidedAt,
+          }
+        : null,
+      rule: {
+        category: normalizedEmail.ruleCategory,
+        confidence: normalizedEmail.ruleConfidence,
+        reasons: normalizedEmail.ruleReasons,
+      },
+      email: {
+        subject: parsedEmail.subject,
+        fromAddress: parsedEmail.fromAddress,
+        fromName: parsedEmail.fromName,
+        toAddresses: parsedEmail.toAddresses,
+        ccAddresses: parsedEmail.ccAddresses,
+        date: rawEmail.internalDate,
+        attachmentCount: parsedEmail.attachmentCount,
+        unsubscribeLink: normalizedEmail.unsubscribeLink,
+        senderDomain: normalizedEmail.senderDomain,
+        isNewsletter: normalizedEmail.isNewsletter,
+        isBulk: normalizedEmail.isBulk,
+        tags: normalizedEmail.tags,
+      },
+      body: {
+        text,
+        html: parsedEmail.htmlBody,
+      },
+    };
+  }
+
+  /** Id of the next pending review item, or null when the queue is empty. */
+  async getNextPendingId(): Promise<string | null> {
+    const { items } = await this.getReviewQueue(1, 1);
+    return items[0]?.classification.id ?? null;
+  }
+
   async approveClassification(
     classificationId: string,
   ): Promise<ReviewDecisionResponse> {
@@ -175,8 +317,13 @@ export class ReviewQueueService {
     };
   }
 
+  /**
+   * Reject a classification, optionally recording the human-corrected
+   * category in the same decision (one flow, not reject-then-recategorize).
+   */
   async rejectClassification(
     classificationId: string,
+    correctedCategory?: string,
   ): Promise<ReviewDecisionResponse> {
     const classification = await this.db.emailClassification.findUnique({
       where: { id: classificationId },
@@ -202,16 +349,21 @@ export class ReviewQueueService {
       data: {
         classificationId,
         decision: ReviewDecisionType.rejected,
+        correctedCategory,
       },
     });
 
-    this.logger.log(`Rejected classification ${classificationId}`);
+    this.logger.log(
+      `Rejected classification ${classificationId}` +
+        (correctedCategory ? ` -> ${correctedCategory}` : ""),
+    );
 
     return {
       id: decision.id,
       classificationId: decision.classificationId,
       decision: decision.decision,
       decidedAt: decision.decidedAt,
+      correctedCategory: decision.correctedCategory,
     };
   }
 
