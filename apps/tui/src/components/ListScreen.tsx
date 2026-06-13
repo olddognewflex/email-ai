@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { spawn } from "node:child_process";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import {
   approveClassification,
@@ -6,6 +7,19 @@ import {
   type QueueItem,
 } from "../api.js";
 import { CategoryPicker } from "./CategoryPicker.js";
+
+function openExternal(url: string): void {
+  const child = spawn("open", [url], { detached: true, stdio: "ignore" });
+  child.on("error", () => {
+    // Swallow spawn failures; the status line already reported the attempt.
+  });
+  child.unref();
+}
+
+/** Only open http(s) links from untrusted email content. */
+function isHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
 
 export interface ListScreenProps {
   items: QueueItem[];
@@ -86,6 +100,14 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
         if (item) void approve(item.classification.id);
       } else if (input === "r") {
         if (item) setPickerOpen(true);
+      } else if (input === "u") {
+        const link = item?.email.unsubscribeLink;
+        if (link && isHttpUrl(link)) {
+          openExternal(link);
+          flash("Opened unsubscribe link in browser");
+        } else {
+          flash("No unsubscribe link for this email", true);
+        }
       }
     },
     { isActive: !pickerOpen },
@@ -198,7 +220,10 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
           }}
         />
       ) : (
-        <Text dimColor>j/k move · enter open · a approve · r reject · q quit</Text>
+        <Text dimColor>
+          j/k move · enter open · a approve · r reject
+          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · q quit
+        </Text>
       )}
 
       {status ? (

@@ -58,8 +58,8 @@ const RULE_ROWS = 5; // border 2 + title + category line + reasons line
 const BODY_CHROME_ROWS = 3; // border 2 + title
 const STATUS_ROWS = 1; // always reserved so the layout never shifts
 
-function openWebView(id: string): void {
-  const child = spawn("open", [`${API_BASE}/review/${id}`], {
+function openExternal(url: string): void {
+  const child = spawn("open", [url], {
     detached: true,
     stdio: "ignore",
   });
@@ -67,6 +67,15 @@ function openWebView(id: string): void {
     // Swallow spawn failures; the status line already reported the attempt.
   });
   child.unref();
+}
+
+function openWebView(id: string): void {
+  openExternal(`${API_BASE}/review/${id}`);
+}
+
+/** Only open http(s) links from untrusted email content. */
+function isHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
 }
 
 export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps) {
@@ -207,6 +216,14 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
       } else if (input === "o") {
         openWebView(id);
         flash("Opened web view in browser");
+      } else if (input === "u") {
+        const link = detail?.email.unsubscribeLink;
+        if (link && isHttpUrl(link)) {
+          openExternal(link);
+          flash("Opened unsubscribe link in browser");
+        } else {
+          flash("No unsubscribe link for this email", true);
+        }
       }
     },
     { isActive: !pickerOpen },
@@ -321,7 +338,8 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
         }} />
       ) : (
         <Text dimColor>
-          a approve · r reject · n next · o open web · j/k scroll · b back · q quit
+          a approve · r reject · n next · o open web
+          {email.unsubscribeLink ? " · u unsubscribe" : ""} · j/k scroll · b back · q quit
         </Text>
       )}
 

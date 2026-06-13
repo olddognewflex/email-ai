@@ -29,6 +29,7 @@ export interface QueueItem {
     fromName: string | null;
     senderDomain: string;
     internalDate: string;
+    unsubscribeLink: string | null;
   };
 }
 
