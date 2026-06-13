@@ -16,6 +16,8 @@ export interface DetailScreenProps {
   onActed: (actedId: string) => void;
   /** n key — move to the next pending item without acting. Resolves false if none. */
   onNext: (currentId: string) => Promise<boolean>;
+  /** b/esc — return to the list of emails. */
+  onBack: () => void;
 }
 
 interface Status {
@@ -67,7 +69,7 @@ function openWebView(id: string): void {
   child.unref();
 }
 
-export function DetailScreen({ id, onActed, onNext }: DetailScreenProps) {
+export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -186,6 +188,10 @@ export function DetailScreen({ id, onActed, onNext }: DetailScreenProps) {
         exit();
         return;
       }
+      if (input === "b" || key.escape) {
+        onBack();
+        return;
+      }
       if (busy) return;
 
       if (input === "j" || key.downArrow) {
@@ -210,7 +216,7 @@ export function DetailScreen({ id, onActed, onNext }: DetailScreenProps) {
     return (
       <Box flexDirection="column" padding={1}>
         <Text color="red">{loadError}</Text>
-        <Text dimColor>n next · q quit</Text>
+        <Text dimColor>b back · n next · q quit</Text>
       </Box>
     );
   }
@@ -315,7 +321,7 @@ export function DetailScreen({ id, onActed, onNext }: DetailScreenProps) {
         }} />
       ) : (
         <Text dimColor>
-          a approve · r reject · n next · o open web · j/k scroll · q quit
+          a approve · r reject · n next · o open web · j/k scroll · b back · q quit
         </Text>
       )}
 

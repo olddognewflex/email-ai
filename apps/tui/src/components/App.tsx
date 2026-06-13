@@ -69,6 +69,27 @@ export function App({ initialId }: AppProps) {
     [refresh],
   );
 
+  /** Approve/reject from the list — refresh in place, stay on the list. */
+  const handleListActed = useCallback(() => {
+    reviewedCount.current += 1;
+    void refresh().catch((err: unknown) => {
+      setFatalError(err instanceof Error ? err.message : String(err));
+    });
+  }, [refresh]);
+
+  /** Back to the list. Loads the queue first when launched straight into a detail. */
+  const handleBack = useCallback(() => {
+    setMode({ type: "list" });
+    if (items.length === 0) {
+      setLoading(true);
+      refresh()
+        .catch((err: unknown) => {
+          setFatalError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setLoading(false));
+    }
+  }, [items.length, refresh]);
+
   /** n key — next pending without acting. Returns false when there is nothing further. */
   const handleNext = useCallback(
     async (currentId: string): Promise<boolean> => {
@@ -99,7 +120,14 @@ export function App({ initialId }: AppProps) {
   }
 
   if (mode.type === "detail") {
-    return <DetailScreen id={mode.id} onActed={handleActed} onNext={handleNext} />;
+    return (
+      <DetailScreen
+        id={mode.id}
+        onActed={handleActed}
+        onNext={handleNext}
+        onBack={handleBack}
+      />
+    );
   }
 
   return (
@@ -108,6 +136,7 @@ export function App({ initialId }: AppProps) {
       total={total}
       loading={loading}
       onSelect={(id) => setMode({ type: "detail", id })}
+      onActed={handleListActed}
     />
   );
 }

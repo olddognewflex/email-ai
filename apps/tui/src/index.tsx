@@ -9,9 +9,10 @@ Usage:
   email-review --help               show this help
 Environment:
   PORT   API port (default 3000, current target ${API_BASE})
-Keys (list):    j/k or arrows move · enter open · q quit
+Keys (list):    j/k or arrows move · enter open · a approve · r reject · q quit
 Keys (detail):  a approve · r reject (pick corrected category, esc cancels)
-                n next pending · o open web view · j/k scroll body · q quit
+                n next pending · o open web view · j/k scroll body
+                b or esc back to list · q quit
 `;
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {
