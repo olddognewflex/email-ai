@@ -384,8 +384,10 @@ export class DigestService {
       for (const email of pendingReview) {
         const approve = `${baseUrl}/review-queue/${email.id}/approve`;
         const reject = `${baseUrl}/review-queue/${email.id}/reject`;
+        const review = `${baseUrl}/review/${email.id}`;
+        const tui = `emailai://review/${email.id}`;
         lines.push(
-          `${this.formatEmailLine(email)} — _${email.category}: ${email.reason}_ · [✓ approve](${approve}) · [✗ reject](${reject})`,
+          `${this.formatEmailLine(email)} — _${email.category}: ${email.reason}_ · [✓ approve](${approve}) · [✗ reject](${reject}) · [review](${review}) · [tui](${tui})`,
         );
       }
       lines.push("");
