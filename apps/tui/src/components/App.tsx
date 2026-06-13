@@ -108,6 +108,10 @@ export function App({ initialId }: AppProps) {
       total={total}
       loading={loading}
       onSelect={(id) => setMode({ type: "detail", id })}
+      onActed={async () => {
+        reviewedCount.current += 1;
+        await refresh();
+      }}
     />
   );
 }
