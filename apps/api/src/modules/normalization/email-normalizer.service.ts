@@ -255,19 +255,24 @@ export class EmailNormalizer {
       }
     }
 
-    // Extract plain URLs from text
-    const textUrls = this.extractUrlsFromText(textBody);
-    for (const url of textUrls) {
+    // Extract plain URLs from text. Plain-text emails often render links
+    // as "label <https://…>", so the URL alone (e.g. a tracking domain
+    // like links.seatgeek.com) carries no "unsubscribe" token — the intent
+    // lives in the preceding label. Inspect that context too.
+    const textUrls = this.extractUrlsWithContext(textBody);
+    for (const { url, before } of textUrls) {
       if (!seenUrls.has(url)) {
         seenUrls.add(url);
+        const isUnsub =
+          this.isUnsubscribeUrl(url) || this.isUnsubscribeText(before);
         const link: DetectedLink = {
           url,
           text: url,
-          type: this.isUnsubscribeUrl(url) ? "unsubscribe" : "general",
+          type: isUnsub ? "unsubscribe" : "general",
         };
         links.push(link);
 
-        if (link.type === "unsubscribe") {
+        if (isUnsub && !unsubscribeLink) {
           unsubscribeLink = url;
         }
       }
@@ -311,10 +316,20 @@ export class EmailNormalizer {
    * Extracts bare URLs from plain text.
    */
   extractUrlsFromText(text: string): string[] {
-    const urls: string[] = [];
+    return this.extractUrlsWithContext(text).map((u) => u.url);
+  }
 
-    // Match URLs (http, https, ftp)
+  /**
+   * Extracts bare URLs from plain text along with the short run of text
+   * immediately preceding each one, so callers can classify a link from
+   * its surrounding label when the URL itself is opaque.
+   */
+  extractUrlsWithContext(text: string): { url: string; before: string }[] {
+    const out: { url: string; before: string }[] = [];
+
+    // Match URLs (http, https)
     const urlRegex = /https?:\/\/[^\s<>"{}|\\^`[\]]+/gi;
+    const CONTEXT_CHARS = 60;
 
     let match;
     while ((match = urlRegex.exec(text)) !== null) {
@@ -322,11 +337,15 @@ export class EmailNormalizer {
       // Clean trailing punctuation
       const cleanUrl = url.replace(/[.,;:!?]+$/, "");
       if (this.isValidUrl(cleanUrl)) {
-        urls.push(cleanUrl);
+        const before = text.slice(
+          Math.max(0, match.index - CONTEXT_CHARS),
+          match.index,
+        );
+        out.push({ url: cleanUrl, before });
       }
     }
 
-    return urls;
+    return out;
   }
 
   /**
@@ -362,15 +381,17 @@ export class EmailNormalizer {
    * Checks if link text indicates an unsubscribe action.
    */
   isUnsubscribeText(text: string): boolean {
+    // Substring (not anchored) matching: link labels and the text leading
+    // up to a URL are rarely the bare word — e.g. "please safely
+    // unsubscribe" or "Click here to opt out". Each token is specific
+    // enough that a substring match carries low false-positive risk.
     const unsubscribePatterns = [
-      /^\s*unsubscribe\s*$/i,
-      /^\s*unsubscribe now\s*$/i,
-      /^\s*opt out\s*$/i,
-      /^\s*opt-out\s*$/i,
-      /^\s*manage preferences\s*$/i,
-      /^\s*email preferences\s*$/i,
-      /^\s*stop receiving these emails\s*$/i,
-      /^\s*remove me\s*$/i,
+      /unsubscribe/i,
+      /\bopt[\s-]?out\b/i,
+      /manage (your )?(email )?preferences/i,
+      /email preferences/i,
+      /stop receiving/i,
+      /\bremove me\b/i,
     ];
 
     return unsubscribePatterns.some((pattern) => pattern.test(text));

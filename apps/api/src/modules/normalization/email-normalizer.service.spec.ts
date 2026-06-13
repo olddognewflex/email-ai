@@ -286,6 +286,31 @@ describe("EmailNormalizer", () => {
       expect(result.unsubscribeLink).toBe("https://example.com/optout");
     });
 
+    it("should identify an unsubscribe link from preceding label when the URL is opaque", () => {
+      // Real-world plain-text shape: tracking domain with no unsubscribe
+      // token, intent carried by the label before it.
+      const text =
+        "If you believe this has been sent to you in error, please safely unsubscribe <https://links.seatgeek.com/s/eh/Z8noZVmu8yYBS4aw8H53rSoOelp5sy5UFIX2uLw5mzAU>";
+      const result = normalizer.extractLinks(text, null);
+      expect(result.unsubscribeLink).toBe(
+        "https://links.seatgeek.com/s/eh/Z8noZVmu8yYBS4aw8H53rSoOelp5sy5UFIX2uLw5mzAU",
+      );
+    });
+
+    it("should not flag an ordinary link as unsubscribe from a long preceding paragraph", () => {
+      const text =
+        "Thanks for signing up. Check out the latest events near you https://example.com/events";
+      const result = normalizer.extractLinks(text, null);
+      expect(result.unsubscribeLink).toBeNull();
+    });
+
+    it("should identify unsubscribe from non-bare anchor text", () => {
+      const html =
+        '<a href="https://links.example.com/abc123">Click here to unsubscribe</a>';
+      const result = normalizer.extractLinks("", html);
+      expect(result.unsubscribeLink).toBe("https://links.example.com/abc123");
+    });
+
     it("should deduplicate URLs", () => {
       const text = "Visit https://example.com and https://example.com again";
       const result = normalizer.extractLinks(text, null);
