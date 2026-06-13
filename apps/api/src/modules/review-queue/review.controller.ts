@@ -51,11 +51,15 @@ export class ReviewController {
         const from =
           item.email.fromName || item.email.fromAddress || "Unknown sender";
         const subject = item.email.subject || "(No subject)";
+        const unsubscribe = item.email.unsubscribeLink
+          ? `<a class="unsub" href="${esc(item.email.unsubscribeLink)}" target="_blank" rel="noopener noreferrer">↪ Unsubscribe</a>`
+          : "";
         return `<tr>
 <td><a href="/review/${encodeURIComponent(item.classification.id)}">${esc(subject)}</a></td>
 <td>${esc(from)}</td>
 <td><code>${esc(item.classification.category)}</code></td>
 <td>${esc(item.classification.confidence)}</td>
+<td>${unsubscribe}</td>
 </tr>`;
       })
       .join("\n");
@@ -65,7 +69,7 @@ export class ReviewController {
       `<h1>Review queue</h1>
 <p style="color: #888">${pagination.total} pending (showing up to 50)</p>
 <table>
-<thead><tr><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th></tr></thead>
+<thead><tr><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
 <tbody>
 ${rows}
 </tbody>
@@ -120,6 +124,11 @@ ${this.rulePanel(detail)}
 <div style="margin: 1rem 0">
 <a class="btn approve" href="/review/${encodeURIComponent(id)}/approve">✓ Approve</a>
 <a class="btn reject" href="/review/${encodeURIComponent(id)}/reject">✗ Reject</a>
+${
+        detail.email.unsubscribeLink
+          ? `<a class="btn unsub" href="${esc(detail.email.unsubscribeLink)}" target="_blank" rel="noopener noreferrer">↪ Unsubscribe</a>`
+          : ""
+      }
 </div>
 <div style="margin: 0 0 1rem 0">
 ${rejectAsButtons}
@@ -253,6 +262,8 @@ table.kv th { color: #888; font-weight: normal; padding-left: 0; }
 .btn { display: inline-block; margin: 0.25rem; padding: 0.5rem 1rem; border: 1px solid #888; border-radius: 6px; text-decoration: none; color: inherit; }
 .btn.approve { border-color: #2e7d32; color: #2e7d32; }
 .btn.reject { border-color: #c62828; color: #c62828; }
+.btn.unsub { border-color: #1565c0; color: #1565c0; }
+a.unsub { color: #1565c0; text-decoration: none; font-size: 0.85rem; }
 pre.body-text { white-space: pre-wrap; border: 1px solid #ccc; border-radius: 6px; padding: 1rem; background: #fafafa; }
 h1 { font-size: 1.3rem; }
 h2 { font-size: 1.1rem; }

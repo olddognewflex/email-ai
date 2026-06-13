@@ -22,6 +22,7 @@ export interface ReviewQueueItem {
     fromName: string | null;
     senderDomain: string;
     internalDate: Date;
+    unsubscribeLink: string | null;
   };
 }
 
@@ -163,6 +164,7 @@ export class ReviewQueueService {
           fromName: parsedEmail?.fromName || null,
           senderDomain: normalizedEmail?.senderDomain || "",
           internalDate: rawEmail?.internalDate || new Date(),
+          unsubscribeLink: normalizedEmail?.unsubscribeLink ?? null,
         },
       };
     });
