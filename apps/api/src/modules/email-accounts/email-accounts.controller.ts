@@ -38,8 +38,11 @@ export class EmailAccountsController {
   }
 
   @Patch(':id')
-  @UsePipes(new ZodValidationPipe(UpdateEmailAccountSchema))
-  update(@Param('id') id: string, @Body() dto: UpdateEmailAccountDto) {
+  update(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateEmailAccountSchema))
+    dto: UpdateEmailAccountDto,
+  ) {
     return this.service.updateLabel(id, dto.label);
   }
 
