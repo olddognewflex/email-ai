@@ -7,7 +7,7 @@ import {
   rejectClassification,
   type QueueItem,
 } from "../api.js";
-import { CategoryPicker } from "./CategoryPicker.js";
+import { CategoryPicker, CATEGORY_PICKER_HEIGHT } from "./CategoryPicker.js";
 
 function openExternal(url: string): void {
   const child = spawn("open", [url], { detached: true, stdio: "ignore" });
@@ -147,9 +147,13 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
     );
   }
 
-  // Keep the cursor row visible inside a fixed-height window.
+  // Keep the cursor row visible inside a fixed-height window. While the picker
+  // is open it renders below the list, so reserve its height too — otherwise the
+  // combined frame overflows the terminal, scrolls the alt-screen, and leaves a
+  // ghosted header several lines down once the picker closes.
   const rows = stdout?.rows ?? 24;
-  const viewportHeight = Math.max(5, rows - 6);
+  const reserved = 6 + (pickerOpen ? CATEGORY_PICKER_HEIGHT : 0);
+  const viewportHeight = Math.max(3, rows - reserved);
   const start = Math.max(
     0,
     Math.min(safeCursor - Math.floor(viewportHeight / 2), items.length - viewportHeight),
