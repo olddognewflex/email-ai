@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AppConfigService } from '../config/config.service';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -113,6 +113,35 @@ describe('createOAuthAccount', () => {
 
     expect(response).not.toHaveProperty('encryptedPassword');
     expect(response).not.toHaveProperty('encryptedRefreshToken');
+  });
+});
+
+describe('updateLabel', () => {
+  it('updates the label of an existing account', async () => {
+    const { service, db } = makeService();
+    db.emailAccount.findUnique.mockResolvedValue(oauthAccountRow());
+    db.emailAccount.update.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve(oauthAccountRow(data)),
+    );
+
+    const response = await service.updateLabel('acc1', 'Acme Corp');
+
+    const update = db.emailAccount.update.mock.calls[0][0];
+    expect(update.where).toEqual({ id: 'acc1' });
+    expect(update.data).toEqual({ label: 'Acme Corp' });
+    expect(response.label).toBe('Acme Corp');
+    expect(response).not.toHaveProperty('encryptedRefreshToken');
+  });
+
+  it('throws when the account does not exist', async () => {
+    const { service, db } = makeService();
+    db.emailAccount.findUnique.mockResolvedValue(null);
+
+    await expect(service.updateLabel('missing', 'X')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(db.emailAccount.update).not.toHaveBeenCalled();
   });
 });
 
