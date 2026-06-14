@@ -106,6 +106,25 @@ export interface DecisionResponse {
   message?: string;
 }
 
+/** Per-account result from POST /email-sync/run-all. */
+export interface SyncResult {
+  accountId: string;
+  mailbox: string;
+  fetchedCount: number;
+  storedCount: number;
+  dryRun: boolean;
+  lastUid: number;
+}
+
+/** Aggregate shape returned by POST /email-sync/run-all. */
+export interface SyncAllResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: SyncResult[];
+  errors: { accountId: string; error: string }[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -137,6 +156,16 @@ export function fetchQueue(page = 1, limit = 50): Promise<QueueResponse> {
 
 export function fetchDetail(id: string): Promise<DetailResponse> {
   return request<DetailResponse>(`/review-queue/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Sync every active account from IMAP. Persists by default (dryRun=false)
+ * since a manual sync from the TUI is meant to fetch real mail.
+ */
+export function syncAllAccounts(dryRun = false): Promise<SyncAllResponse> {
+  return request<SyncAllResponse>(`/email-sync/run-all?dryRun=${dryRun}`, {
+    method: "POST",
+  });
 }
 
 export function approveClassification(id: string): Promise<DecisionResponse> {

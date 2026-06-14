@@ -5,6 +5,7 @@ import {
   API_BASE,
   approveClassification,
   rejectClassification,
+  syncAllAccounts,
   type QueueItem,
 } from "../api.js";
 import { CategoryPicker, CATEGORY_PICKER_HEIGHT } from "./CategoryPicker.js";
@@ -68,6 +69,22 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
     }
   };
 
+  const sync = async () => {
+    setBusy(true);
+    flash("Syncing all accounts…");
+    try {
+      const res = await syncAllAccounts();
+      const stored = res.results.reduce((sum, r) => sum + r.storedCount, 0);
+      const summary = `Synced ${res.succeeded}/${res.total} accounts · ${stored} stored`;
+      flash(res.failed > 0 ? `${summary} · ${res.failed} failed` : summary, res.failed > 0);
+      onActed();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const reject = async (id: string, correctedCategory: string | null) => {
     setPickerOpen(false);
     setBusy(true);
@@ -86,6 +103,10 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
     (input, key) => {
       if (input === "q") {
         exit();
+        return;
+      }
+      if (input === "s") {
+        if (!busy && !loading) void sync();
         return;
       }
       if (loading || items.length === 0 || busy) return;
@@ -142,7 +163,7 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
       <Box flexDirection="column" padding={1}>
         <Text bold>Review queue</Text>
         <Text>Nothing pending review. All caught up.</Text>
-        <Text dimColor>q quit</Text>
+        <Text dimColor>s sync all accounts · q quit</Text>
       </Box>
     );
   }
@@ -244,7 +265,7 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
       ) : (
         <Text dimColor>
           j/k move · enter open · a approve · r reject · o open web
-          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · q quit
+          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · s sync · q quit
         </Text>
       )}
 
