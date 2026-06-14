@@ -69,7 +69,8 @@ pnpm --filter @email-ai/api test:cov
 | GET    | /email-accounts                 | List registered accounts                       |
 | GET    | /email-accounts/:id             | Get account by ID                              |
 | DELETE | /email-accounts/:id             | Remove account (fails if emails exist)         |
-| POST   | /email-sync/:id/run?dryRun=true | Sync from IMAP (default dry-run)               |
+| POST   | /email-sync/:id/run?dryRun=true | Sync one account from IMAP (default dry-run)    |
+| POST   | /email-sync/run-all?dryRun=true | Sync all active accounts (default dry-run)      |
 | GET    | /email-sync/:id/states          | Sync state per mailbox                         |
 | POST   | /email-parser/run               | Parse all unprocessed raw emails               |
 | POST   | /email-parser/:id/parse         | Parse a single raw email                       |

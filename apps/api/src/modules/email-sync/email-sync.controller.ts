@@ -9,6 +9,17 @@ export class EmailSyncController {
     private readonly ingestion: ImapIngestionService,
   ) {}
 
+  @Post("run-all")
+  runAll(
+    @Query("dryRun") dryRun = "true",
+    @Query("mailbox") mailbox?: string,
+  ) {
+    return this.service.syncAll({
+      dryRun: dryRun !== "false",
+      mailbox,
+    });
+  }
+
   @Post(":accountId/run")
   run(
     @Param("accountId") accountId: string,
