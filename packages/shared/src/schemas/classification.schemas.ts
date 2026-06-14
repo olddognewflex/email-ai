@@ -9,7 +9,8 @@ export const EmailCategorySchema = z.enum([
   "read_later", // Important but not urgent
   "archive", // Safe to archive after reading
   "delete", // Safe to delete
-  "newsletter", // Regular subscriptions/digests
+  "newsletter", // Wanted subscriptions/digests (intent: inform)
+  "marketing", // Promotional/sales blasts (intent: sell)
   "receipt", // Purchase confirmations, invoices
   "notification", // Automated alerts, system messages
   "social", // Social media, networking

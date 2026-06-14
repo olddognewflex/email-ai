@@ -141,7 +141,7 @@ export class ClassificationVerificationService {
         tags: [],
       },
       {
-        name: "Newsletter - Marketing",
+        name: "Newsletter - Weekly Digest",
         subject: "Weekly Digest: Top Stories",
         fromAddress: "newsletter@company.com",
         fromName: "Company Newsletter",
@@ -150,6 +150,17 @@ export class ClassificationVerificationService {
         isNewsletter: true,
         isBulk: true,
         tags: ["newsletter"],
+      },
+      {
+        name: "Marketing - Promotional Offer",
+        subject: "Special Offer: 40% off — limited time only!",
+        fromAddress: "deals@store.com",
+        fromName: "Store Deals",
+        body: "Our biggest sale of the year. Shop now and save 40% on everything. Unsubscribe.",
+        expectedCategory: "marketing",
+        isNewsletter: false,
+        isBulk: true,
+        tags: [],
       },
       {
         name: "Alert - Security",
