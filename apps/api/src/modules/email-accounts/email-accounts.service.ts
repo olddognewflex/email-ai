@@ -62,6 +62,16 @@ export class EmailAccountsService {
     return this.toResponse(account);
   }
 
+  async updateLabel(id: string, label: string): Promise<EmailAccountResponse> {
+    const account = await this.db.emailAccount.findUnique({ where: { id } });
+    if (!account) throw new NotFoundException(`EmailAccount ${id} not found`);
+    const updated = await this.db.emailAccount.update({
+      where: { id },
+      data: { label },
+    });
+    return this.toResponse(updated);
+  }
+
   async remove(id: string): Promise<void> {
     const account = await this.db.emailAccount.findUnique({
       where: { id },

@@ -5,11 +5,16 @@ import {
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
   UsePipes,
 } from '@nestjs/common';
 import { EmailAccountsService } from './email-accounts.service';
 import { CreateEmailAccountSchema } from './dto/create-email-account.dto';
+import {
+  UpdateEmailAccountSchema,
+  UpdateEmailAccountDto,
+} from './dto/update-email-account.dto';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 
 @Controller('email-accounts')
@@ -30,6 +35,15 @@ export class EmailAccountsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateEmailAccountSchema))
+    dto: UpdateEmailAccountDto,
+  ) {
+    return this.service.updateLabel(id, dto.label);
   }
 
   @Delete(':id')
