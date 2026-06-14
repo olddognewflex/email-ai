@@ -4,6 +4,13 @@ import { EmailCategorySchema } from "@email-ai/shared";
 
 const NO_CORRECTION = "(no correction — plain reject)";
 
+/**
+ * Rendered line count: round border (2) + title (1) + footer (1) + one row per
+ * option (NO_CORRECTION + every category). The list screen reserves this many
+ * lines so the picker never overflows the terminal and scrolls the frame.
+ */
+export const CATEGORY_PICKER_HEIGHT = EmailCategorySchema.options.length + 1 + 4;
+
 export interface CategoryPickerProps {
   /** category string for a corrected reject, or null for a plain reject */
   onSelect: (category: string | null) => void;
