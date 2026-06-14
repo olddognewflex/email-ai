@@ -277,6 +277,7 @@ export class DigestService {
     if (
       category === "archive" ||
       category === "delete" ||
+      category === "marketing" ||
       category === "social" ||
       category === "unknown" ||
       (importance === "low" &&

@@ -40,7 +40,7 @@ CLASSIFICATION SCHEMA:
 Return a JSON object with these exact fields:
 
 {
-  "category": "<one of: needs_attention, read_later, archive, delete, newsletter, receipt, notification, social, personal, unknown>",
+  "category": "<one of: needs_attention, read_later, archive, delete, newsletter, marketing, receipt, notification, social, personal, unknown>",
   "importance": "<one of: critical, high, medium, low, none>",
   "urgency": "<one of: immediate, today, this_week, eventually, none>",
   "recommendedAction": "<one of: read_now, reply_needed, schedule_reply, archive, mark_read, delete, unsubscribe, flag_for_followup, delegate, no_action>",
@@ -60,10 +60,11 @@ GUIDELINES:
 
 RULES:
 - Receipts/invoices: category="receipt", importance="medium", action="archive"
-- Newsletters: category="newsletter", importance="low", action="unsubscribe" or "mark_read"
+- Newsletters (primary intent is to INFORM — digests, subscribed content, mailing lists the user opted into): category="newsletter", importance="low", action="mark_read" or "unsubscribe"
+- Marketing (primary intent is to SELL — promotions, sales, discount offers, abandoned-cart, product launches, "% off", "limited time"): category="marketing", importance="none", action="unsubscribe" or "delete"
+- Newsletter vs marketing tie-breaker: if the dominant purpose is driving a purchase, it is marketing even when it has an unsubscribe link or comes from a bulk sender. If the dominant purpose is sharing information/content, it is newsletter.
 - Personal emails: category="personal", importance="high", action="read_now" or "reply_needed"
 - Security alerts: category="notification", importance="critical", urgency="immediate"
-- Marketing: category="delete" or "newsletter", importance="none"
 - When in doubt: needsReview=true, confidence="low"
 
 Respond ONLY with valid JSON. No markdown, no explanation, no code blocks.`;

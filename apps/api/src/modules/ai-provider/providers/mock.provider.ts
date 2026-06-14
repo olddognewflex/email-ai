@@ -24,6 +24,25 @@ export class MockLlmProvider implements BaseLlmProvider {
     }
 
     if (
+      lowerPrompt.includes("sale") ||
+      lowerPrompt.includes("% off") ||
+      lowerPrompt.includes("special offer") ||
+      lowerPrompt.includes("limited time")
+    ) {
+      return {
+        content: JSON.stringify({
+          category: "marketing",
+          importance: "none",
+          urgency: "none",
+          recommendedAction: "unsubscribe",
+          confidence: "high",
+          needsReview: false,
+          reason: "Promotional email whose primary intent is to drive a sale",
+        }),
+      };
+    }
+
+    if (
       lowerPrompt.includes("newsletter") ||
       lowerPrompt.includes("unsubscribe")
     ) {
@@ -32,10 +51,10 @@ export class MockLlmProvider implements BaseLlmProvider {
           category: "newsletter",
           importance: "low",
           urgency: "none",
-          recommendedAction: "unsubscribe",
+          recommendedAction: "mark_read",
           confidence: "high",
           needsReview: false,
-          reason: "Marketing newsletter with unsubscribe link",
+          reason: "Subscribed newsletter whose primary intent is to inform",
         }),
       };
     }
