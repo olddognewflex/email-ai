@@ -28,6 +28,7 @@ export interface QueueItem {
     fromAddress: string | null;
     fromName: string | null;
     senderDomain: string;
+    accountLabel: string | null;
     internalDate: string;
     unsubscribeLink: string | null;
   };
@@ -78,6 +79,7 @@ export interface ClassificationDetail {
     attachmentCount: number;
     unsubscribeLink: string | null;
     senderDomain: string;
+    accountLabel: string | null;
     isNewsletter: boolean;
     isBulk: boolean;
     tags: string[];

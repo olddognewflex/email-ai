@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { spawn } from "node:child_process";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import {
+  API_BASE,
   approveClassification,
   rejectClassification,
   type QueueItem,
@@ -100,6 +101,11 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
         if (item) void approve(item.classification.id);
       } else if (input === "r") {
         if (item) setPickerOpen(true);
+      } else if (input === "o") {
+        if (item) {
+          openExternal(`${API_BASE}/review/${item.classification.id}`);
+          flash("Opened web view in browser");
+        }
       } else if (input === "u") {
         const link = item?.email.unsubscribeLink;
         if (link && isHttpUrl(link)) {
@@ -114,12 +120,13 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
   );
 
   const columns = stdout?.columns ?? 80;
+  const accountWidth = 10;
   const confidenceWidth = 8;
   const categoryWidth = 17;
   const fromWidth = 26;
   const subjectWidth = Math.max(
     16,
-    columns - confidenceWidth - categoryWidth - fromWidth - 8,
+    columns - accountWidth - confidenceWidth - categoryWidth - fromWidth - 10,
   );
 
   if (loading) {
@@ -155,18 +162,23 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
       <Text bold>
         Review queue — {total} pending{items.length < total ? ` (showing ${items.length})` : ""}
       </Text>
-      <Box>
-        <Box width={subjectWidth + 2}>
+      <Box columnGap={2}>
+        <Box width={accountWidth}>
+          <Text dimColor underline>
+            Account
+          </Text>
+        </Box>
+        <Box width={subjectWidth}>
           <Text dimColor underline>
             Subject
           </Text>
         </Box>
-        <Box width={fromWidth + 2}>
+        <Box width={fromWidth}>
           <Text dimColor underline>
             From
           </Text>
         </Box>
-        <Box width={categoryWidth + 2}>
+        <Box width={categoryWidth}>
           <Text dimColor underline>
             Category
           </Text>
@@ -180,25 +192,31 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
       {visible.map((item, i) => {
         const index = start + i;
         const selected = index === safeCursor;
-        const subject = truncate(item.email.subject ?? "(no subject)", subjectWidth);
+        const subject = truncate(item.email.subject ?? "(no subject)", subjectWidth - 2);
         const from = truncate(
           item.email.fromName || item.email.fromAddress || item.email.senderDomain || "(unknown)",
           fromWidth,
         );
+        const account = truncate(item.email.accountLabel ?? "—", accountWidth);
         return (
-          <Box key={item.classification.id}>
-            <Box width={subjectWidth + 2}>
+          <Box key={item.classification.id} columnGap={2}>
+            <Box width={accountWidth}>
+              <Text inverse={selected} color={selected ? undefined : "blue"} wrap="truncate-end">
+                {account}
+              </Text>
+            </Box>
+            <Box width={subjectWidth}>
               <Text inverse={selected} wrap="truncate-end">
                 {selected ? "> " : "  "}
                 {subject}
               </Text>
             </Box>
-            <Box width={fromWidth + 2}>
+            <Box width={fromWidth}>
               <Text inverse={selected} wrap="truncate-end" dimColor={!selected}>
                 {from}
               </Text>
             </Box>
-            <Box width={categoryWidth + 2}>
+            <Box width={categoryWidth}>
               <Text inverse={selected} color={selected ? undefined : "cyan"} wrap="truncate-end">
                 {truncate(item.classification.category, categoryWidth)}
               </Text>
@@ -221,7 +239,7 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
         />
       ) : (
         <Text dimColor>
-          j/k move · enter open · a approve · r reject
+          j/k move · enter open · a approve · r reject · o open web
           {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · q quit
         </Text>
       )}

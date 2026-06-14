@@ -53,7 +53,7 @@ function chunkText(text: string, width: number, maxRows: number): string[] {
 
 // Fixed row costs of everything around the body viewport, so the whole
 // screen always fits the terminal and only the body scrolls inside its box.
-const HEADER_ROWS = 5; // border 2 + subject/from/date
+const HEADER_ROWS = 6; // border 2 + subject/to/from/date
 const RULE_ROWS = 5; // border 2 + title + category line + reasons line
 const BODY_CHROME_ROWS = 3; // border 2 + title
 const STATUS_ROWS = 1; // always reserved so the layout never shifts
@@ -261,6 +261,7 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
         <Text bold wrap="truncate-end">
           {email.subject ?? "(no subject)"}
         </Text>
+        <Text wrap="truncate-end">To: {email.accountLabel ?? "—"}</Text>
         <Text wrap="truncate-end">From: {fromLine}</Text>
         <Text wrap="truncate-end" dimColor>
           Date: {formatDate(email.date)}
