@@ -155,6 +155,42 @@ export class EmailSyncService implements OnModuleDestroy {
     return { accountId, mailbox, fetchedCount, storedCount, dryRun, lastUid };
   }
 
+  async syncAll(
+    options: Partial<SyncOptions> = {},
+  ): Promise<{
+    total: number;
+    succeeded: number;
+    failed: number;
+    results: SyncResult[];
+    errors: { accountId: string; error: string }[];
+  }> {
+    const accounts = await this.db.emailAccount.findMany({
+      where: { isActive: true },
+      select: { id: true },
+    });
+
+    const results: SyncResult[] = [];
+    const errors: { accountId: string; error: string }[] = [];
+
+    for (const { id } of accounts) {
+      try {
+        results.push(await this.syncAccount(id, options));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Account ${id} sync failed: ${message}`);
+        errors.push({ accountId: id, error: message });
+      }
+    }
+
+    return {
+      total: accounts.length,
+      succeeded: results.length,
+      failed: errors.length,
+      results,
+      errors,
+    };
+  }
+
   async onModuleDestroy(): Promise<void> {
     for (const [id, client] of this.activeConnections) {
       this.logger.warn(`Force-closing connection for account ${id}`);
