@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
-import { fetchQueue, type QueueItem } from "../api.js";
+import { fetchActionable, fetchQueue, type QueueItem } from "../api.js";
+
+export type QueueView = "review" | "actionable";
 import { ListScreen } from "./ListScreen.js";
 import { DetailScreen } from "./DetailScreen.js";
 
@@ -22,14 +24,29 @@ export function App({ initialId }: AppProps) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(!initialId);
   const [fatalError, setFatalError] = useState<string | null>(null);
+  const [view, setView] = useState<QueueView>("review");
   const reviewedCount = useRef(0);
 
-  const refresh = useCallback(async (): Promise<QueueItem[]> => {
-    const res = await fetchQueue(1, 50);
+  const load = useCallback(async (v: QueueView): Promise<QueueItem[]> => {
+    const res = await (v === "actionable" ? fetchActionable : fetchQueue)(1, 50);
     setItems(res.data);
     setTotal(res.pagination.total);
     return res.data;
   }, []);
+
+  const refresh = useCallback((): Promise<QueueItem[]> => load(view), [load, view]);
+
+  /** Switch between the review queue and the actionable list, reloading. */
+  const toggleView = useCallback(() => {
+    const nextView: QueueView = view === "review" ? "actionable" : "review";
+    setView(nextView);
+    setLoading(true);
+    load(nextView)
+      .catch((err: unknown) => {
+        setFatalError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoading(false));
+  }, [view, load]);
 
   // Initial queue load when starting on the list screen.
   useEffect(() => {
@@ -135,6 +152,8 @@ export function App({ initialId }: AppProps) {
       items={items}
       total={total}
       loading={loading}
+      view={view}
+      onToggleView={toggleView}
       onSelect={(id) => setMode({ type: "detail", id })}
       onActed={handleListActed}
     />

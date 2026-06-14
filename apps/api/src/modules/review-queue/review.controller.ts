@@ -37,12 +37,41 @@ export class ReviewController {
       1,
       50,
     );
+    return this.queueListPage("review", "Review queue", items, pagination, {
+      empty: "Queue empty — nothing awaiting review. 🎉",
+      count: "pending",
+    });
+  }
+
+  @Get("actionable")
+  @Header("Content-Type", "text/html")
+  async actionablePage(): Promise<string> {
+    const { items, pagination } =
+      await this.reviewQueueService.getActionableQueue(1, 50);
+    return this.queueListPage("actionable", "Actionable", items, pagination, {
+      empty: "Nothing needs action right now. 🎉",
+      count: "actionable",
+    });
+  }
+
+  /** Shared list rendering for the review and actionable queues. */
+  private queueListPage(
+    view: "review" | "actionable",
+    title: string,
+    items: Awaited<
+      ReturnType<ReviewQueueService["getReviewQueue"]>
+    >["items"],
+    pagination: { total: number },
+    labels: { empty: string; count: string },
+  ): string {
+    const nav = this.nav(view);
+    const detailSuffix = view === "actionable" ? "?from=actionable" : "";
 
     if (items.length === 0) {
       return this.page(
-        "Review queue",
-        `<h1>Review queue</h1>
-<p style="color: #888">Queue empty — nothing awaiting review. 🎉</p>`,
+        title,
+        `${nav}<h1>${esc(title)}</h1>
+<p style="color: #888">${esc(labels.empty)}</p>`,
       );
     }
 
@@ -57,7 +86,7 @@ export class ReviewController {
           : "";
         return `<tr>
 <td>${esc(account)}</td>
-<td><a href="/review/${encodeURIComponent(item.classification.id)}">${esc(subject)}</a></td>
+<td><a href="/review/${encodeURIComponent(item.classification.id)}${detailSuffix}">${esc(subject)}</a></td>
 <td>${esc(from)}</td>
 <td><code>${esc(item.classification.category)}</code></td>
 <td>${esc(item.classification.confidence)}</td>
@@ -67,9 +96,9 @@ export class ReviewController {
       .join("\n");
 
     return this.page(
-      "Review queue",
-      `<h1>Review queue</h1>
-<p style="color: #888">${pagination.total} pending (showing up to 50)</p>
+      title,
+      `${nav}<h1>${esc(title)}</h1>
+<p style="color: #888">${pagination.total} ${esc(labels.count)} (showing up to 50)</p>
 <table>
 <thead><tr><th>Account</th><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
 <tbody>
@@ -79,14 +108,44 @@ ${rows}
     );
   }
 
+  /** Top nav linking the two queue views; the active one is bolded. */
+  private nav(active: "review" | "actionable"): string {
+    const link = (
+      href: string,
+      label: string,
+      isActive: boolean,
+    ): string =>
+      isActive
+        ? `<strong>${esc(label)}</strong>`
+        : `<a href="${href}">${esc(label)}</a>`;
+    return `<nav style="margin-bottom: 1rem; color: #888">
+${link("/review", "Needs review", active === "review")} ·
+${link("/review/actionable", "Actionable", active === "actionable")}
+</nav>`;
+  }
+
   @Get(":id")
   @Header("Content-Type", "text/html")
   async detailPage(
     @Param("id") id: string,
     @Query("images") images?: string,
+    @Query("from") fromView?: string,
   ): Promise<string> {
     const detail = await this.reviewQueueService.getClassificationDetail(id);
     const allowImages = images === "1";
+
+    // Which list the user came from, so every link back out (approve,
+    // reject, image toggle, decision redirect) returns to the same view.
+    const origin: "review" | "actionable" =
+      fromView === "actionable" ? "actionable" : "review";
+    const backHref = origin === "actionable" ? "/review/actionable" : "/review";
+    const backLabel =
+      origin === "actionable" ? "actionable" : "review queue";
+    const fromSuffix = origin === "actionable" ? "from=actionable" : "";
+    const withFrom = (path: string): string => {
+      if (!fromSuffix) return path;
+      return path + (path.includes("?") ? "&" : "?") + fromSuffix;
+    };
 
     const from = detail.email.fromName
       ? `${detail.email.fromName} <${detail.email.fromAddress ?? ""}>`
@@ -106,13 +165,13 @@ Already decided: <strong>${esc(detail.reviewDecision.decision)}</strong>${
     const rejectAsButtons = EmailCategorySchema.options
       .map(
         (category) =>
-          `<a class="btn" href="/review/${encodeURIComponent(id)}/reject?category=${category}">Reject as ${category}</a>`,
+          `<a class="btn" href="${withFrom(`/review/${encodeURIComponent(id)}/reject?category=${category}`)}">Reject as ${category}</a>`,
       )
       .join("\n");
 
     return this.page(
       `Review: ${subject}`,
-      `<p><a href="/review">← Back to queue</a></p>
+      `<p><a href="${backHref}">← Back to ${esc(backLabel)}</a></p>
 <h1>${esc(subject)}</h1>
 <p>To: <strong>${esc(account)}</strong></p>
 <p><strong>${esc(from)}</strong> · ${esc(detail.email.date.toLocaleString())} · ${esc(detail.email.senderDomain)}${
@@ -126,8 +185,8 @@ ${this.classificationPanel(detail)}
 ${this.rulePanel(detail)}
 </div>
 <div style="margin: 1rem 0">
-<a class="btn approve" href="/review/${encodeURIComponent(id)}/approve">✓ Approve</a>
-<a class="btn reject" href="/review/${encodeURIComponent(id)}/reject">✗ Reject</a>
+<a class="btn approve" href="${withFrom(`/review/${encodeURIComponent(id)}/approve`)}">✓ Approve</a>
+<a class="btn reject" href="${withFrom(`/review/${encodeURIComponent(id)}/reject`)}">✗ Reject</a>
 ${
         detail.email.unsubscribeLink
           ? `<a class="btn unsub" href="${esc(detail.email.unsubscribeLink)}" target="_blank" rel="noopener noreferrer">↪ Unsubscribe</a>`
@@ -138,16 +197,19 @@ ${
 ${rejectAsButtons}
 </div>
 <h2>Email body</h2>
-${this.bodySection(detail, id, allowImages)}`,
+${this.bodySection(detail, id, allowImages, origin)}`,
     );
   }
 
   @Get(":id/approve")
   @Redirect()
-  async approveAndNext(@Param("id") id: string) {
+  async approveAndNext(
+    @Param("id") id: string,
+    @Query("from") fromView?: string,
+  ) {
     this.logger.log(`Approving classification ${id} (web UI)`);
     await this.reviewQueueService.approveClassification(id);
-    return this.redirectToNext();
+    return this.redirectToNext(fromView);
   }
 
   @Get(":id/reject")
@@ -155,6 +217,7 @@ ${this.bodySection(detail, id, allowImages)}`,
   async rejectAndNext(
     @Param("id") id: string,
     @Query("category") category?: string,
+    @Query("from") fromView?: string,
   ) {
     let correctedCategory: string | undefined;
     if (category !== undefined) {
@@ -172,10 +235,21 @@ ${this.bodySection(detail, id, allowImages)}`,
         (correctedCategory ? ` -> ${correctedCategory}` : ""),
     );
     await this.reviewQueueService.rejectClassification(id, correctedCategory);
-    return this.redirectToNext();
+    return this.redirectToNext(fromView);
   }
 
-  private async redirectToNext(): Promise<{ url: string; statusCode: number }> {
+  /**
+   * After a web-UI decision, return to where the user was. The actionable
+   * list isn't decision-gated (items don't disappear), so there's no
+   * "next pending" to advance to — go back to the list. The review queue
+   * advances to the next item still awaiting review.
+   */
+  private async redirectToNext(
+    fromView?: string,
+  ): Promise<{ url: string; statusCode: number }> {
+    if (fromView === "actionable") {
+      return { url: "/review/actionable", statusCode: 302 };
+    }
     const nextId = await this.reviewQueueService.getNextPendingId();
     return {
       url: nextId ? `/review/${encodeURIComponent(nextId)}` : "/review",
@@ -218,14 +292,17 @@ ${reasons}
     detail: ClassificationDetail,
     id: string,
     allowImages: boolean,
+    origin: "review" | "actionable",
   ): string {
     if (!detail.body.html) {
       return `<pre class="body-text">${esc(detail.body.text)}</pre>`;
     }
 
+    const fromSuffix = origin === "actionable" ? "&from=actionable" : "";
+    const base = `/review/${encodeURIComponent(id)}`;
     const toggle = allowImages
-      ? `<p><a href="/review/${encodeURIComponent(id)}">Block remote images</a></p>`
-      : `<p><a href="/review/${encodeURIComponent(id)}?images=1">Load remote images</a></p>`;
+      ? `<p><a href="${base}${origin === "actionable" ? "?from=actionable" : ""}">Block remote images</a></p>`
+      : `<p><a href="${base}?images=1${fromSuffix}">Load remote images</a></p>`;
 
     // sandbox="" blocks scripts, forms, popups, and same-origin access.
     // On top of that, a CSP <meta> injected into the srcdoc blocks

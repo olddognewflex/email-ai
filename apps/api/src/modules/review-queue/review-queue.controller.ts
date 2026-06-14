@@ -43,6 +43,25 @@ export class ReviewQueueController {
     };
   }
 
+  @Get("actionable")
+  async getActionableQueue(
+    @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    this.logger.log(`Fetching actionable queue: page=${page}, limit=${limit}`);
+
+    const result = await this.reviewQueueService.getActionableQueue(
+      page,
+      limit,
+    );
+
+    return {
+      success: true,
+      data: result.items,
+      pagination: result.pagination,
+    };
+  }
+
   @Get(":id")
   async getClassificationDetail(@Param("id") id: string) {
     const detail = await this.reviewQueueService.getClassificationDetail(id);
