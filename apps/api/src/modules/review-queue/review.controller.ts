@@ -51,10 +51,12 @@ export class ReviewController {
         const from =
           item.email.fromName || item.email.fromAddress || "Unknown sender";
         const subject = item.email.subject || "(No subject)";
+        const account = item.email.accountLabel || "—";
         const unsubscribe = item.email.unsubscribeLink
           ? `<a class="unsub" href="${esc(item.email.unsubscribeLink)}" target="_blank" rel="noopener noreferrer">↪ Unsubscribe</a>`
           : "";
         return `<tr>
+<td>${esc(account)}</td>
 <td><a href="/review/${encodeURIComponent(item.classification.id)}">${esc(subject)}</a></td>
 <td>${esc(from)}</td>
 <td><code>${esc(item.classification.category)}</code></td>
@@ -69,7 +71,7 @@ export class ReviewController {
       `<h1>Review queue</h1>
 <p style="color: #888">${pagination.total} pending (showing up to 50)</p>
 <table>
-<thead><tr><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
+<thead><tr><th>Account</th><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
 <tbody>
 ${rows}
 </tbody>
@@ -90,6 +92,7 @@ ${rows}
       ? `${detail.email.fromName} <${detail.email.fromAddress ?? ""}>`
       : (detail.email.fromAddress ?? "Unknown sender");
     const subject = detail.email.subject || "(No subject)";
+    const account = detail.email.accountLabel || "—";
 
     const decisionBanner = detail.reviewDecision
       ? `<p style="padding: 0.5rem 1rem; background: #fff3cd; border: 1px solid #ffe69c; border-radius: 6px">
@@ -111,6 +114,7 @@ Already decided: <strong>${esc(detail.reviewDecision.decision)}</strong>${
       `Review: ${subject}`,
       `<p><a href="/review">← Back to queue</a></p>
 <h1>${esc(subject)}</h1>
+<p>To: <strong>${esc(account)}</strong></p>
 <p><strong>${esc(from)}</strong> · ${esc(detail.email.date.toLocaleString())} · ${esc(detail.email.senderDomain)}${
         detail.email.attachmentCount > 0
           ? ` · 📎 ${detail.email.attachmentCount}`

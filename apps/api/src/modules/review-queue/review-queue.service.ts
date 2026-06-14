@@ -21,6 +21,7 @@ export interface ReviewQueueItem {
     fromAddress: string | null;
     fromName: string | null;
     senderDomain: string;
+    accountLabel: string | null;
     internalDate: Date;
     unsubscribeLink: string | null;
   };
@@ -75,6 +76,7 @@ export interface ClassificationDetail {
     attachmentCount: number;
     unsubscribeLink: string | null;
     senderDomain: string;
+    accountLabel: string | null;
     isNewsletter: boolean;
     isBulk: boolean;
     tags: string[];
@@ -123,7 +125,11 @@ export class ReviewQueueService {
             include: {
               parsedEmail: {
                 include: {
-                  rawEmail: true,
+                  rawEmail: {
+                    include: {
+                      account: true,
+                    },
+                  },
                 },
               },
             },
@@ -163,6 +169,7 @@ export class ReviewQueueService {
           fromAddress: parsedEmail?.fromAddress || null,
           fromName: parsedEmail?.fromName || null,
           senderDomain: normalizedEmail?.senderDomain || "",
+          accountLabel: rawEmail?.account?.label ?? null,
           internalDate: rawEmail?.internalDate || new Date(),
           unsubscribeLink: normalizedEmail?.unsubscribeLink ?? null,
         },
@@ -196,7 +203,11 @@ export class ReviewQueueService {
           include: {
             parsedEmail: {
               include: {
-                rawEmail: true,
+                rawEmail: {
+                  include: {
+                    account: true,
+                  },
+                },
               },
             },
           },
@@ -262,6 +273,7 @@ export class ReviewQueueService {
         attachmentCount: parsedEmail.attachmentCount,
         unsubscribeLink: normalizedEmail.unsubscribeLink,
         senderDomain: normalizedEmail.senderDomain,
+        accountLabel: rawEmail.account?.label ?? null,
         isNewsletter: normalizedEmail.isNewsletter,
         isBulk: normalizedEmail.isBulk,
         tags: normalizedEmail.tags,
