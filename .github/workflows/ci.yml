@@ -24,6 +24,9 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @email-ai/api run db:generate
 
+      - name: Build workspace libraries
+        run: pnpm --filter @email-ai/shared --filter @email-ai/mail-client run build
+
       - name: Typecheck
         run: pnpm run typecheck
 
