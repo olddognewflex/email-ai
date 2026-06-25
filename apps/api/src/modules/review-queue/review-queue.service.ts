@@ -87,6 +87,20 @@ export interface ClassificationDetail {
   };
 }
 
+/**
+ * Classifications the digest treats as "actionable" — the email needs
+ * the user to do something. Mirrors DigestService.determineActionabilityGroup
+ * so the in-app Actionable view matches the digest's Actionable section.
+ */
+const ACTIONABLE_WHERE = {
+  OR: [
+    { category: "needs_attention" },
+    { category: "personal", importance: { in: ["high", "critical"] } },
+    { recommendedAction: { in: ["reply_needed", "read_now"] } },
+    { urgency: { in: ["immediate", "today"] }, importance: "high" },
+  ],
+};
+
 @Injectable()
 export class ReviewQueueService {
   private readonly logger = new Logger(ReviewQueueService.name);
@@ -99,7 +113,6 @@ export class ReviewQueueService {
     limit: number = 20,
     confidenceThreshold?: string,
   ): Promise<ReviewQueueResponse> {
-    const skip = (page - 1) * limit;
     const threshold = confidenceThreshold || this.DEFAULT_CONFIDENCE_THRESHOLD;
 
     const confidenceLevels = ["low", "medium", "high"];
@@ -117,9 +130,33 @@ export class ReviewQueueService {
       reviewDecision: null,
     };
 
+    return this.runQueue(whereClause, page, limit);
+  }
+
+  /**
+   * Emails the classifier flagged as needing action, surfaced in their own
+   * list so the user can open one and read the full context to act on.
+   * Independent of review decisions — actioning the email is separate from
+   * reviewing the classification.
+   */
+  async getActionableQueue(
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<ReviewQueueResponse> {
+    return this.runQueue(ACTIONABLE_WHERE, page, limit);
+  }
+
+  /** Shared list query + projection for the review and actionable queues. */
+  private async runQueue(
+    where: any,
+    page: number,
+    limit: number,
+  ): Promise<ReviewQueueResponse> {
+    const skip = (page - 1) * limit;
+
     const [classifications, total] = await Promise.all([
       this.db.emailClassification.findMany({
-        where: whereClause,
+        where,
         include: {
           normalizedEmail: {
             include: {
@@ -142,7 +179,7 @@ export class ReviewQueueService {
         take: limit,
       }),
       this.db.emailClassification.count({
-        where: whereClause,
+        where,
       }),
     ]);
 

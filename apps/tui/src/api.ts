@@ -154,6 +154,13 @@ export function fetchQueue(page = 1, limit = 50): Promise<QueueResponse> {
   return request<QueueResponse>(`/review-queue?page=${page}&limit=${limit}`);
 }
 
+/** Emails the classifier flagged as needing action (the digest's Actionable set). */
+export function fetchActionable(page = 1, limit = 50): Promise<QueueResponse> {
+  return request<QueueResponse>(
+    `/review-queue/actionable?page=${page}&limit=${limit}`,
+  );
+}
+
 export function fetchDetail(id: string): Promise<DetailResponse> {
   return request<DetailResponse>(`/review-queue/${encodeURIComponent(id)}`);
 }

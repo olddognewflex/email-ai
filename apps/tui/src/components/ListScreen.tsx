@@ -23,10 +23,16 @@ function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
+export type QueueView = "review" | "actionable";
+
 export interface ListScreenProps {
   items: QueueItem[];
   total: number;
   loading: boolean;
+  /** Which list is shown — drives the title and pending/actionable wording. */
+  view: QueueView;
+  /** t key — switch between the review queue and the actionable list. */
+  onToggleView: () => void;
   onSelect: (id: string) => void;
   /** Called after a successful approve/reject so the parent can refresh the queue. */
   onActed: () => void;
@@ -37,7 +43,7 @@ function truncate(value: string, width: number): string {
   return value.length > width ? `${value.slice(0, width - 1)}…` : value;
 }
 
-export function ListScreen({ items, total, loading, onSelect, onActed }: ListScreenProps) {
+export function ListScreen({ items, total, loading, view, onToggleView, onSelect, onActed }: ListScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [cursor, setCursor] = useState(0);
@@ -109,6 +115,10 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
         if (!busy && !loading) void sync();
         return;
       }
+      if (input === "t") {
+        if (!busy && !loading) onToggleView();
+        return;
+      }
       if (loading || items.length === 0 || busy) return;
 
       const item = items[safeCursor];
@@ -140,6 +150,10 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
     { isActive: !pickerOpen },
   );
 
+  const title = view === "actionable" ? "Actionable" : "Review queue";
+  const countLabel = view === "actionable" ? "actionable" : "pending";
+  const toggleLabel = view === "actionable" ? "review queue" : "actionable";
+
   const columns = stdout?.columns ?? 80;
   const accountWidth = 10;
   const confidenceWidth = 8;
@@ -153,7 +167,7 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
   if (loading) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text>Loading review queue…</Text>
+        <Text>Loading {title.toLowerCase()}…</Text>
       </Box>
     );
   }
@@ -161,9 +175,13 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
   if (items.length === 0) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text bold>Review queue</Text>
-        <Text>Nothing pending review. All caught up.</Text>
-        <Text dimColor>s sync all accounts · q quit</Text>
+        <Text bold>{title}</Text>
+        <Text>
+          {view === "actionable"
+            ? "Nothing needs action right now. All caught up."
+            : "Nothing pending review. All caught up."}
+        </Text>
+        <Text dimColor>t {toggleLabel} · s sync all accounts · q quit</Text>
       </Box>
     );
   }
@@ -185,7 +203,7 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
   return (
     <Box flexDirection="column" paddingX={1}>
       <Text bold>
-        Review queue — {total} pending{items.length < total ? ` (showing ${items.length})` : ""}
+        {title} — {total} {countLabel}{items.length < total ? ` (showing ${items.length})` : ""}
       </Text>
       <Box columnGap={2}>
         <Box width={accountWidth}>
@@ -265,7 +283,7 @@ export function ListScreen({ items, total, loading, onSelect, onActed }: ListScr
       ) : (
         <Text dimColor>
           j/k move · enter open · a approve · r reject · o open web
-          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · s sync · q quit
+          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · s sync · q quit
         </Text>
       )}
 

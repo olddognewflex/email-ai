@@ -300,6 +300,9 @@ export class DigestService {
    */
   generateMarkdown(digest: DailyDigest): string {
     const lines: string[] = [];
+    const baseUrl =
+      process.env.DIGEST_LINK_BASE_URL ??
+      `http://localhost:${process.env.PORT ?? 3000}`;
 
     // Header
     lines.push(`# Email Digest - ${digest.date}`);
@@ -333,8 +336,18 @@ export class DigestService {
     if (digest.actionable.count === 0) {
       lines.push("*No actionable items today.*");
     } else {
+      lines.push(
+        `*[Open the Actionable list →](${baseUrl}/review/actionable)*`,
+      );
+      lines.push("");
       for (const email of digest.actionable.emails) {
-        lines.push(this.formatEmailLine(email));
+        // Link straight to the email's context so it can be acted on;
+        // ?from=actionable keeps the web back-nav on the actionable list.
+        const open = `${baseUrl}/review/${email.id}?from=actionable`;
+        const tui = `emailai://review/${email.id}`;
+        lines.push(
+          `${this.formatEmailLine(email)} · [open](${open}) · [tui](${tui})`,
+        );
       }
     }
     lines.push("");
@@ -373,9 +386,6 @@ export class DigestService {
     ].filter((e) => e.needsReview && !e.reviewDecision);
 
     if (pendingReview.length > 0) {
-      const baseUrl =
-        process.env.DIGEST_LINK_BASE_URL ??
-        `http://localhost:${process.env.PORT ?? 3000}`;
       lines.push("## Needs Review");
       lines.push("");
       lines.push(
