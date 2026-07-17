@@ -19,26 +19,33 @@ import {
   KimiProvider,
   DeepSeekProvider,
 } from "./providers";
+import { RateLimiter, RateLimiterConfig } from "./rate-limiter";
 import {
-  RateLimiter,
-  RateLimiterConfig,
-  parseRetryAfter,
-} from "./rate-limiter";
+  AiProviderError,
+  BreakerOpenError,
+  categorizeError,
+} from "./ai-provider.error";
+import { CircuitBreaker } from "./circuit-breaker";
 
 @Injectable()
 export class AiProviderService {
   private readonly logger = new Logger(AiProviderService.name);
   private providerInstances: Map<string, BaseLlmProvider> = new Map();
   private rateLimiter: RateLimiter;
+  private breaker: CircuitBreaker;
+  private transientCapMs: number;
 
   constructor(private readonly db: DatabaseService) {
+    // The transient cap doubles as the 429 short-vs-quota threshold.
+    this.transientCapMs = Number(process.env.AI_TRANSIENT_MAX_DELAY_MS) || 60000;
     const config: RateLimiterConfig = {
       requestsPerMinute: Number(process.env.AI_REQUESTS_PER_MINUTE) || 20,
-      maxRetries: 3,
+      maxRetries: Number(process.env.AI_MAX_RETRIES) || 3,
       baseDelayMs: 1000,
-      maxDelayMs: 60000,
+      maxDelayMs: this.transientCapMs,
     };
     this.rateLimiter = new RateLimiter(config);
+    this.breaker = new CircuitBreaker();
   }
 
   async getAllConfigs(): Promise<AiProviderConfig[]> {
@@ -152,12 +159,80 @@ export class AiProviderService {
     this.providerInstances.delete(id);
   }
 
+  /**
+   * Run an LLM completion behind the circuit breaker.
+   *
+   * On any provider failure this THROWS (it no longer resolves to
+   * `{ content: "", error }`): transient errors are retried in-run by the
+   * rate limiter, and quota/auth errors open the persisted breaker before
+   * propagating. Callers should treat a throw as "no answer" and defer.
+   */
   async complete(request: LlmRequest): Promise<LlmResponse> {
-    const provider = await this.getProviderInstance();
-    return this.rateLimiter.execute(
-      () => provider.complete(request),
-      parseRetryAfter,
-    );
+    const gate = this.breaker.canAttempt();
+    if (!gate.allowed) {
+      throw new BreakerOpenError(
+        gate.state.nextAllowedAttempt,
+        gate.state.reason,
+      );
+    }
+
+    const providerType = await this.getActiveProviderType();
+    try {
+      const provider = await this.getProviderInstance();
+      const result = await this.rateLimiter.execute(() =>
+        provider.complete(request),
+      );
+      this.breaker.recordSuccess();
+      return result;
+    } catch (error) {
+      const category = categorizeError(error, {
+        transientCapMs: this.transientCapMs,
+      });
+      const info =
+        error instanceof AiProviderError
+          ? {
+              resetAt: error.resetAt,
+              retryAfterMs: error.retryAfterMs,
+              provider: error.provider,
+              error: error.message,
+            }
+          : {
+              provider: providerType ?? undefined,
+              error: error instanceof Error ? error.message : String(error),
+            };
+      const state = this.breaker.recordFailure(category, info);
+      if (category === "auth") {
+        this.logger.error(
+          `AI ${providerType ?? "provider"} auth/config error — breaker held ` +
+            `until ${state.nextAllowedAttempt}. Manual fix required: ${info.error}`,
+        );
+      } else {
+        this.logger.warn(
+          `AI ${providerType ?? "provider"} ${category} error — breaker open ` +
+            `until ${state.nextAllowedAttempt}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Read-only breaker status for run-start checks (does not consume a probe). */
+  getBreakerStatus(): {
+    open: boolean;
+    nextAllowedAttempt?: string;
+    reason?: string;
+  } {
+    const state = this.breaker.peek();
+    return {
+      open: this.breaker.isOpen(state),
+      nextAllowedAttempt: state.nextAllowedAttempt,
+      reason: state.reason,
+    };
+  }
+
+  /** Manually clear the breaker (e.g. after rotating a bad API key). */
+  resetBreaker(): void {
+    this.breaker.reset();
   }
 
   async getActiveProviderType(): Promise<string | null> {

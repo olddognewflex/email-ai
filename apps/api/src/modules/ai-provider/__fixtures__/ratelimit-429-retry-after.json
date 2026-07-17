@@ -1,0 +1,10 @@
+{
+  "_source": "representative OpenAI-compatible 429, short Retry-After (transient)",
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "8",
+    "x-ratelimit-reset-requests": "8s"
+  },
+  "body": "{\"error\":{\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"code\":\"rate_limit_exceeded\"}}"
+}

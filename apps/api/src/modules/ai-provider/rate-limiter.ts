@@ -1,174 +1,101 @@
 /**
- * Rate limiter with exponential backoff for API calls.
- * Implements token bucket algorithm with retry logic for 429 errors.
+ * In-run rate limiter + transient-retry executor for AI calls.
+ *
+ * Scope narrowed deliberately: this layer now retries *only* transient
+ * failures (timeouts, 5xx, connection errors, short-hint 429s) with
+ * exponential backoff + jitter, capped by `maxDelayMs`. Quota and auth
+ * errors are rethrown immediately so the circuit breaker one level up can
+ * open and persist — retrying those in-run just burns more doomed calls.
  */
+import { AiProviderError, categorizeError } from "./ai-provider.error";
+
 export interface RateLimiterConfig {
   requestsPerMinute: number;
   maxRetries: number;
   baseDelayMs: number;
+  /** Cap for transient backoff (the "transient cap" knob). */
   maxDelayMs: number;
 }
 
 export const DEFAULT_RATE_LIMIT: RateLimiterConfig = {
-  requestsPerMinute: 20, // Conservative default for most providers
+  requestsPerMinute: 20,
   maxRetries: 3,
   baseDelayMs: 1000,
   maxDelayMs: 60000,
 };
 
-export interface RateLimitInfo {
-  remaining: number;
-  resetAt: number;
-  retryAfter?: number;
+export interface RateLimiterDeps {
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  rng?: () => number;
 }
 
 export class RateLimiter {
   private lastRequestTime = 0;
   private minIntervalMs: number;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly rng: () => number;
 
-  constructor(private config: RateLimiterConfig = DEFAULT_RATE_LIMIT) {
+  constructor(
+    private config: RateLimiterConfig = DEFAULT_RATE_LIMIT,
+    deps: RateLimiterDeps = {},
+  ) {
     this.minIntervalMs = (60 * 1000) / config.requestsPerMinute;
+    this.now = deps.now ?? (() => Date.now());
+    this.sleep =
+      deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.rng = deps.rng ?? Math.random;
   }
 
   /**
-   * Execute a function with rate limiting and exponential backoff.
+   * Execute `fn` with request spacing and transient-only retry. Non-transient
+   * errors (quota/auth/unknown) are rethrown on the first occurrence.
    */
-  async execute<T>(
-    fn: () => Promise<T>,
-    getRetryAfter?: (error: unknown) => number | undefined,
-  ): Promise<T> {
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
     await this.waitForRateLimit();
 
     let attempt = 0;
-
     while (true) {
       try {
         const result = await fn();
-        this.lastRequestTime = Date.now();
+        this.lastRequestTime = this.now();
         return result;
       } catch (error) {
         attempt++;
+        const category = categorizeError(error, {
+          transientCapMs: this.config.maxDelayMs,
+        });
 
-        if (attempt > this.config.maxRetries) {
+        if (category !== "transient" || attempt > this.config.maxRetries) {
           throw error;
         }
 
-        // Check for rate limit error and get retry delay
-        const retryDelay = getRetryAfter?.(error);
-
-        if (retryDelay !== undefined && retryDelay > 0) {
-          this.logger.debug(
-            `Rate limited, waiting ${retryDelay}ms before retry ${attempt}`,
-          );
-          await this.delay(retryDelay + 100); // Add buffer
-        } else if (this.isRateLimitError(error)) {
-          const backoffDelay = this.calculateBackoff(attempt);
-          this.logger.debug(
-            `Rate limit error, backing off ${backoffDelay}ms before retry ${attempt}`,
-          );
-          await this.delay(backoffDelay);
-        } else {
-          // Non-rate-limit error, rethrow immediately
-          throw error;
-        }
+        // Honor a short reset hint if the provider gave one; else back off.
+        const hint =
+          error instanceof AiProviderError ? error.retryAfterMs : undefined;
+        const delay =
+          hint !== undefined && hint <= this.config.maxDelayMs
+            ? hint + 100
+            : this.calculateBackoff(attempt);
+        await this.sleep(delay);
       }
     }
   }
 
-  /**
-   * Wait for the rate limit interval to pass.
-   */
   private async waitForRateLimit(): Promise<void> {
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    const waitTime = Math.max(0, this.minIntervalMs - timeSinceLastRequest);
-
+    const now = this.now();
+    const sinceLast = now - this.lastRequestTime;
+    const waitTime = Math.max(0, this.minIntervalMs - sinceLast);
     if (waitTime > 0) {
-      this.logger.debug(`Rate limit: waiting ${waitTime.toFixed(0)}ms`);
-      await this.delay(waitTime);
+      await this.sleep(waitTime);
     }
   }
 
-  /**
-   * Calculate exponential backoff delay with jitter.
-   */
+  /** Exponential backoff with 30% jitter, capped at maxDelayMs. */
   private calculateBackoff(attempt: number): number {
-    const exponentialDelay = this.config.baseDelayMs * Math.pow(2, attempt - 1);
-    const jitter = Math.random() * 0.3 * exponentialDelay; // 30% jitter
-    const delay = Math.min(exponentialDelay + jitter, this.config.maxDelayMs);
-    return Math.floor(delay);
+    const exponential = this.config.baseDelayMs * Math.pow(2, attempt - 1);
+    const jitter = this.rng() * 0.3 * exponential;
+    return Math.floor(Math.min(exponential + jitter, this.config.maxDelayMs));
   }
-
-  /**
-   * Check if error is a rate limit error (429).
-   */
-  private isRateLimitError(error: unknown): boolean {
-    if (error instanceof Error) {
-      const message = error.message.toLowerCase();
-      return (
-        message.includes("429") ||
-        message.includes("rate limit") ||
-        message.includes("rate_limit") ||
-        message.includes("too many requests")
-      );
-    }
-    return false;
-  }
-
-  /**
-   * Simple delay promise.
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private get logger() {
-    return {
-      debug: (message: string) => {
-        if (process.env.NODE_ENV === "development") {
-          console.debug(`[RateLimiter] ${message}`);
-        }
-      },
-    };
-  }
-}
-
-/**
- * Parse retry-after header or error message for delay in milliseconds.
- */
-export function parseRetryAfter(error: unknown): number | undefined {
-  if (!(error instanceof Error)) {
-    return undefined;
-  }
-
-  const message = error.message;
-
-  // Look for retry-after in seconds (e.g., "Please try again in 5.976s")
-  const secondsMatch = message.match(/try again in ([\d.]+)s/i);
-  if (secondsMatch) {
-    const seconds = parseFloat(secondsMatch[1]);
-    if (!isNaN(seconds)) {
-      return Math.ceil(seconds * 1000);
-    }
-  }
-
-  // Look for milliseconds
-  const msMatch = message.match(/try again in ([\d.]+)ms/i);
-  if (msMatch) {
-    const ms = parseFloat(msMatch[1]);
-    if (!isNaN(ms)) {
-      return Math.ceil(ms);
-    }
-  }
-
-  // Look for "Retry-After: <seconds>" header format
-  const headerMatch = message.match(/retry-after[:\s]+(\d+)/i);
-  if (headerMatch) {
-    const seconds = parseInt(headerMatch[1], 10);
-    if (!isNaN(seconds)) {
-      return seconds * 1000;
-    }
-  }
-
-  return undefined;
 }

@@ -1,5 +1,6 @@
 import { LlmRequest, LlmResponse } from "@email-ai/shared";
 import { BaseLlmProvider } from "./base.provider";
+import { throwIfNotOk } from "../ai-provider.error";
 
 interface OpenAIResponse {
   choices: Array<{
@@ -47,13 +48,7 @@ export class OpenAiProvider implements BaseLlmProvider {
       }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      return {
-        content: "",
-        error: `OpenAI API error: ${response.status} - ${error}`,
-      };
-    }
+    await throwIfNotOk(response, "openai");
 
     const data = (await response.json()) as OpenAIResponse;
 
