@@ -120,7 +120,7 @@ describe("mapJudgmentsToOutput", () => {
     });
   });
 
-  describe("confidence bands use min(category, action)", () => {
+  describe("confidence bands use category confidence only", () => {
     it("high at the high threshold", () => {
       const { output } = mapJudgmentsToOutput(
         answers({
@@ -132,13 +132,23 @@ describe("mapJudgmentsToOutput", () => {
       expect(output.confidence).toBe("high");
     });
 
-    it("medium when the weaker answer is between thresholds", () => {
+    it("medium when category confidence is between thresholds", () => {
       const { output } = mapJudgmentsToOutput(
-        answers({ categoryConfidence: 0.95, actionConfidence: 0.6 }),
+        answers({ categoryConfidence: 0.6, actionConfidence: 0.99 }),
         noRules,
       );
       expect(output.confidence).toBe("medium");
       expect(output.needsReview).toBe(false);
+    });
+
+    it("ignores a spread action distribution", () => {
+      const { output, diagnostics } = mapJudgmentsToOutput(
+        answers({ categoryConfidence: 0.95, actionConfidence: 0.2 }),
+        noRules,
+      );
+      expect(output.confidence).toBe("high");
+      expect(output.needsReview).toBe(false);
+      expect(diagnostics.actionConfidence).toBe(0.2);
     });
 
     it("medium exactly at the medium threshold", () => {
@@ -196,6 +206,31 @@ describe("mapJudgmentsToOutput", () => {
       expect(output.needsReview).toBe(true);
       expect(diagnostics.ruleDisagreement).toBe(true);
       expect(output.reason).toMatch(/review: rules said newsletter \(high\)/);
+    });
+
+    it.each([
+      ["newsletter", "marketing"],
+      ["marketing", "newsletter"],
+      ["newsletter", "notification"],
+      ["newsletter", "social"],
+    ] as const)(
+      "does not flag rules=%s vs chosen=%s (compatible pair)",
+      (ruleCategory, category) => {
+        const { output, diagnostics } = mapJudgmentsToOutput(
+          answers({ category, action: "mark_read" }),
+          { ruleCategory, ruleConfidence: "high" },
+        );
+        expect(diagnostics.ruleDisagreement).toBe(false);
+        expect(output.needsReview).toBe(false);
+      },
+    );
+
+    it("still flags newsletter rules vs a non-compatible category", () => {
+      const { diagnostics } = mapJudgmentsToOutput(
+        answers({ category: "personal", action: "reply_needed" }),
+        { ruleCategory: "newsletter", ruleConfidence: "high" },
+      );
+      expect(diagnostics.ruleDisagreement).toBe(true);
     });
 
     it("ignores rule disagreement when rule confidence is not high", () => {

@@ -128,12 +128,19 @@ mapping running inside the breaker guard:
    - `category` / `recommendedAction` = the chosen labels (validated against
      the shared enums).
    - `importance` / `urgency` = `levels[clamp(round(score))]`.
-   - `confidence` = band of `min(category.confidence, action.confidence)`:
+   - `confidence` = band of `category.confidence` only:
      `>= HIGH_CONFIDENCE_THRESHOLD` (0.75) → `high`,
      `>= MEDIUM_CONFIDENCE_THRESHOLD` (0.5) → `medium`, else `low`.
+     The action confidence is left out because several actions are often
+     equally acceptable (`unsubscribe` / `delete` / `mark_read` for a promo).
+     It is still visible as the action `p=` in `reason`.
    - `needsReview` if **any** of: category is `unknown`; confidence is `low`;
      `sensitive.noul >= SENSITIVE_REVIEW_THRESHOLD` (0.5); the rule engine
-     said a different valid category with `high` confidence.
+     said a different valid category with `high` confidence, unless the two
+     are a pair in `RULE_COMPATIBLE_CATEGORIES` (currently `newsletter` ↔
+     `marketing` / `notification` / `social`: the rule engine labels every
+     bulk or mailing-list sender a newsletter, and TypeSafe separates
+     promotions, automated alerts and social mail).
    - `reason` is deterministic and ≤ 500 chars, e.g.
      `receipt (p=0.91) → archive (p=0.84); importance medium (2.10/4), urgency none (0.20/4); review: sensitive (p=0.62)`.
      Scores are shown to 2 decimals and the level is rounded from that
@@ -141,9 +148,13 @@ mapping running inside the breaker guard:
    - The result is validated with `EmailClassificationOutputSchema.parse`.
 3. The row is stored with `providerUsed: "typesafe"` and an audit envelope in
    `rawResponse`:
-   `{ "questionSetVersion": CLASSIFICATION_QUESTION_SET_VERSION, "model": "<jev-…>", "raw": "<exact response body text>" }`.
+   `{ "questionSetVersion": CLASSIFICATION_QUESTION_SET_VERSION, "reviewPolicyVersion": REVIEW_POLICY_VERSION, "model": "<jev-…>", "raw": "<exact response body text>" }`.
    Bump `CLASSIFICATION_QUESTION_SET_VERSION` in `classification.questions.ts`
-   whenever the state shape or question wording changes.
+   whenever the state shape or question wording changes, and
+   `REVIEW_POLICY_VERSION` in `classification.judgments.ts` whenever a
+   threshold or review trigger changes. Rows written before the policy
+   version existed (the first live runs on 2026-09-22) have no
+   `reviewPolicyVersion` and used the older min(category, action) rule.
 
 Question set:
 

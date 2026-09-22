@@ -18,12 +18,44 @@ import {
 } from "./classification.questions";
 
 // ── Review policy thresholds ─────────────────────────────────────────────
-// TypeSafe confidence is the peakedness of the answer distribution (0..1).
 
-/** min(category, action) confidence at or above this → "high". */
+/** Bump when any threshold or trigger below changes; stored for audit. */
+export const REVIEW_POLICY_VERSION = "2026-09-22.2";
+
+// TypeSafe confidence is the peakedness of the answer distribution (0..1).
+// Confidence reflects the category choice only. Action alternatives are
+// often all acceptable (unsubscribe / delete / mark_read for a promo), so
+// a spread action distribution is not a reason to distrust the triage.
+
+/** Category confidence at or above this → "high". */
 export const HIGH_CONFIDENCE_THRESHOLD = 0.75;
-/** min(category, action) confidence at or above this → "medium", else "low". */
+/** Category confidence at or above this → "medium", else "low". */
 export const MEDIUM_CONFIDENCE_THRESHOLD = 0.5;
+
+/**
+ * Category pairs close enough that a rule-engine disagreement is not worth
+ * a human look. The rule engine labels any bulk / mailing-list sender
+ * `newsletter`; TypeSafe separates what that bulk mail actually is:
+ * promotions (marketing), automated alerts such as GitHub notifications
+ * (notification), and social network mail (social).
+ */
+export const RULE_COMPATIBLE_CATEGORIES: ReadonlyArray<
+  readonly [EmailCategory, EmailCategory]
+> = [
+  ["newsletter", "marketing"],
+  ["newsletter", "notification"],
+  ["newsletter", "social"],
+];
+
+function categoriesCompatible(a: EmailCategory, b: EmailCategory): boolean {
+  return (
+    a === b ||
+    RULE_COMPATIBLE_CATEGORIES.some(
+      ([x, y]) => (a === x && b === y) || (a === y && b === x),
+    )
+  );
+}
+
 /** P(sensitive) at or above this → needsReview. */
 export const SENSITIVE_REVIEW_THRESHOLD = 0.5;
 /** Max length of the stored `reason` (matches EmailClassificationOutputSchema). */
@@ -148,15 +180,13 @@ export function mapJudgmentsToOutput(
   const importance = levelFor(IMPORTANCE_LEVELS, importanceAnswer.score);
   const urgency = levelFor(URGENCY_LEVELS, urgencyAnswer.score);
 
-  const confidence = bandConfidence(
-    Math.min(categoryAnswer.confidence, actionAnswer.confidence),
-  );
+  const confidence = bandConfidence(categoryAnswer.confidence);
 
   const ruleCategory = EmailCategorySchema.safeParse(input.ruleCategory);
   const ruleDisagreement =
     input.ruleConfidence === "high" &&
     ruleCategory.success &&
-    ruleCategory.data !== category;
+    !categoriesCompatible(ruleCategory.data, category);
 
   const reviewTriggers: string[] = [];
   if (category === "unknown") reviewTriggers.push("category unknown");
