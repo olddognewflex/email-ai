@@ -1,0 +1,8 @@
+{
+  "_source": "representative 429 with no reset hint (falls back to persisted exp backoff)",
+  "status": 429,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"error\":{\"message\":\"Too Many Requests\"}}"
+}

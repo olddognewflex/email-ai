@@ -9,6 +9,7 @@ import {
 } from "@email-ai/shared";
 import { buildClassificationPrompt } from "./classification.prompt";
 import { AiProviderService } from "../ai-provider/ai-provider.service";
+import { BreakerOpenError } from "../ai-provider/ai-provider.error";
 
 @Injectable()
 export class ClassificationService {
@@ -44,28 +45,30 @@ export class ClassificationService {
     let output: EmailClassificationOutput;
     let providerUsed: string | null = null;
 
+    // Reasoning models spend hidden thinking tokens from the same
+    // budget; too low a cap truncates the visible JSON mid-string.
+    const request: LlmRequest = {
+      prompt,
+      temperature: 0.3,
+      maxTokens: Number(process.env.AI_MAX_TOKENS) || 4000,
+    };
+
+    providerUsed = await this.aiProviderService.getActiveProviderType();
+
+    // A provider/breaker failure means we never got an answer. Let it
+    // propagate and leave the email unclassified for a later run, rather
+    // than poisoning it with a fallback classification that marks it done.
+    const response = await this.aiProviderService.complete(request);
+    rawResponse = response.content;
+
     try {
-      // Reasoning models spend hidden thinking tokens from the same
-      // budget; too low a cap truncates the visible JSON mid-string.
-      const request: LlmRequest = {
-        prompt,
-        temperature: 0.3,
-        maxTokens: Number(process.env.AI_MAX_TOKENS) || 4000,
-      };
-
-      providerUsed = await this.aiProviderService.getActiveProviderType();
-      const response = await this.aiProviderService.complete(request);
-      rawResponse = response.content;
-
-      if (response.error) {
-        throw new Error(`LLM error: ${response.error}`);
-      }
-
       output = this.parseAndValidateResponse(rawResponse);
     } catch (error) {
-      this.logger.error(
-        `Classification failed for ${normalizedEmailId}:`,
-        error,
+      // A real-but-unparseable response is a genuine fallback case.
+      this.logger.warn(
+        `Classification response invalid for ${normalizedEmailId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       );
       classificationError =
         error instanceof Error ? error.message : "Unknown error";
@@ -107,6 +110,7 @@ export class ClassificationService {
     processed: number;
     errors: number;
     needsReview: number;
+    skipped: number;
   }> {
     const unclassified = await this.db.normalizedEmail.findMany({
       where: {
@@ -118,9 +122,26 @@ export class ClassificationService {
       select: { id: true },
     });
 
+    // Circuit breaker: if a prior run hit a quota/auth wall, skip the whole
+    // batch cheaply instead of firing one doomed request per email.
+    const breaker = this.aiProviderService.getBreakerStatus();
+    if (breaker.open) {
+      this.logger.warn(
+        `AI breaker open until ${breaker.nextAllowedAttempt} ` +
+          `(${breaker.reason ?? "unknown"}); skipping ${unclassified.length} email(s)`,
+      );
+      return {
+        processed: 0,
+        errors: 0,
+        needsReview: 0,
+        skipped: unclassified.length,
+      };
+    }
+
     let processed = 0;
     let errors = 0;
     let needsReviewCount = 0;
+    let skipped = 0;
 
     for (const { id } of unclassified) {
       try {
@@ -130,16 +151,28 @@ export class ClassificationService {
           needsReviewCount++;
         }
       } catch (error) {
+        // The breaker tripped mid-batch (first quota/auth error opened it,
+        // this is the next email short-circuiting). Stop rather than log a
+        // failure per remaining email.
+        if (error instanceof BreakerOpenError) {
+          skipped = unclassified.length - processed - errors;
+          this.logger.warn(
+            `AI breaker opened mid-batch (until ${error.nextAllowedAttempt}); ` +
+              `deferring ${skipped} email(s)`,
+          );
+          break;
+        }
         this.logger.error(`Failed to classify normalized email ${id}`, error);
         errors++;
       }
     }
 
     this.logger.log(
-      `Classified ${processed} emails (${needsReviewCount} need review, ${errors} errors)`,
+      `Classified ${processed} emails (${needsReviewCount} need review, ` +
+        `${errors} errors, ${skipped} deferred)`,
     );
 
-    return { processed, errors, needsReview: needsReviewCount };
+    return { processed, errors, needsReview: needsReviewCount, skipped };
   }
 
   private buildInput(

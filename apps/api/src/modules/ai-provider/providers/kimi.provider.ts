@@ -1,5 +1,6 @@
 import { LlmRequest, LlmResponse } from "@email-ai/shared";
 import { BaseLlmProvider } from "./base.provider";
+import { throwIfNotOk } from "../ai-provider.error";
 
 interface KimiResponse {
   choices: Array<{
@@ -44,13 +45,7 @@ export class KimiProvider implements BaseLlmProvider {
       }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      return {
-        content: "",
-        error: `Kimi API error: ${response.status} - ${error}`,
-      };
-    }
+    await throwIfNotOk(response, "kimi");
 
     const data = (await response.json()) as KimiResponse;
     const content = data.choices[0]?.message?.content ?? "";

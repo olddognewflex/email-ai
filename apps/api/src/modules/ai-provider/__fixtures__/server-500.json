@@ -1,0 +1,8 @@
+{
+  "_source": "representative upstream 5xx (transient)",
+  "status": 500,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"error\":{\"message\":\"Internal server error\"}}"
+}

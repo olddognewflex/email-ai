@@ -1,0 +1,8 @@
+{
+  "_source": "live api.moonshot.cn 2026-07-17 (real capture)",
+  "status": 401,
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "body": "{\"error\":{\"message\":\"Invalid Authentication\",\"type\":\"invalid_authentication_error\"}}"
+}

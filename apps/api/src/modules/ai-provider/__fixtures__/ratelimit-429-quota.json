@@ -1,0 +1,10 @@
+{
+  "_source": "representative 429, long reset window (weekly quota exhausted)",
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-reset-requests": "3h30m0s",
+    "x-ratelimit-remaining-requests": "0"
+  },
+  "body": "{\"error\":{\"message\":\"You have exceeded your weekly quota. Limit resets at the start of next week.\",\"type\":\"quota_exceeded\"}}"
+}

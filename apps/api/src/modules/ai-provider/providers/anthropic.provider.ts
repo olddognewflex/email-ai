@@ -1,5 +1,6 @@
 import { LlmRequest, LlmResponse } from "@email-ai/shared";
 import { BaseLlmProvider } from "./base.provider";
+import { throwIfNotOk } from "../ai-provider.error";
 
 interface AnthropicResponse {
   content: Array<{
@@ -39,13 +40,7 @@ export class AnthropicProvider implements BaseLlmProvider {
       }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      return {
-        content: "",
-        error: `Anthropic API error: ${response.status} - ${error}`,
-      };
-    }
+    await throwIfNotOk(response, "anthropic");
 
     const data = (await response.json()) as AnthropicResponse;
 

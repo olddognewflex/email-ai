@@ -1,5 +1,6 @@
 import { LlmRequest, LlmResponse } from "@email-ai/shared";
 import { BaseLlmProvider } from "./base.provider";
+import { throwIfNotOk } from "../ai-provider.error";
 
 interface GeminiResponse {
   candidates: Array<{
@@ -54,13 +55,7 @@ export class GoogleProvider implements BaseLlmProvider {
       }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      return {
-        content: "",
-        error: `Google API error: ${response.status} - ${error}`,
-      };
-    }
+    await throwIfNotOk(response, "google");
 
     const data = (await response.json()) as GeminiResponse;
     const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
