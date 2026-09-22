@@ -2,6 +2,14 @@
 
 This module provides LLM-based email classification using normalized email content and rule engine output.
 
+Two classification paths share one output schema. The path is chosen per
+email from the **active AI provider**:
+
+- **TypeSafe path** (active provider `typesafe`) — structured state + five
+  typed questions, answers mapped deterministically. See
+  [TypeSafe path](#typesafe-path).
+- **LLM path** (any other provider) — free-text prompt → JSON → Zod.
+
 ## Overview
 
 The classification pipeline uses an LLM to analyze emails and produce structured classifications with:
@@ -41,7 +49,8 @@ Zod Schema Validation
 - `read_later` - Important but not urgent
 - `archive` - Safe to archive after reading
 - `delete` - Safe to delete
-- `newsletter` - Regular subscriptions/digests
+- `newsletter` - Regular subscriptions/digests (intent: inform)
+- `marketing` - Promotions and sales blasts (intent: sell)
 - `receipt` - Purchase confirmations, invoices
 - `notification` - Automated alerts, system messages
 - `social` - Social media, networking
@@ -52,7 +61,7 @@ Zod Schema Validation
 
 1. **No Auto-Actions**: Classifications suggest actions but never execute them
 2. **Schema Validation**: All LLM outputs validated with Zod
-3. **Fallback Mode**: On any error, defaults to `needsReview: true`
+3. **Fallback Mode**: An unusable LLM response defaults to `needsReview: true` (TypeSafe failures write no row and are retried)
 4. **Audit Trail**: Raw LLM responses stored for debugging
 5. **Deterministic Prompts**: Same inputs produce consistent requests
 
@@ -96,7 +105,96 @@ POST / classification / run;
 }
 ```
 
-## Prompt Structure
+## TypeSafe Path
+
+When the active provider is `typesafe`, `classifyEmail` calls
+`AiProviderService.judgeWith()` instead of `complete()`, with the answer
+mapping running inside the breaker guard:
+
+1. `classification.questions.ts` builds the request:
+   - `buildClassificationState(input)` →
+     `{ email: { from, subject, senderDomain, body }, signals: { isNewsletter, isBulk }, ruleEngine: { category, confidence, reasons } }`.
+     Every free-text field is capped so no single email can produce an
+     oversized request (a 422): body `MAX_BODY_CHARS` (12,000, with a
+     truncation note), from `MAX_FROM_CHARS` (320), subject
+     `MAX_SUBJECT_CHARS` (500), domain `MAX_DOMAIN_CHARS` (255), and at most
+     `MAX_RULE_REASONS` (10) rule reasons of `MAX_RULE_REASON_CHARS` (200)
+     each. `truncateText` never splits a UTF-16 surrogate pair (emoji).
+   - `buildClassificationQuestions()` asks five questions in one call
+     (table below). Instructions reference state paths with backticks and
+     treat `ruleEngine` as a hint, not ground truth.
+2. `classification.judgments.ts` — `mapJudgmentsToOutput(answers, input)` is a
+   pure function producing `{ output, diagnostics }`:
+   - `category` / `recommendedAction` = the chosen labels (validated against
+     the shared enums).
+   - `importance` / `urgency` = `levels[clamp(round(score))]`.
+   - `confidence` = band of `min(category.confidence, action.confidence)`:
+     `>= HIGH_CONFIDENCE_THRESHOLD` (0.75) → `high`,
+     `>= MEDIUM_CONFIDENCE_THRESHOLD` (0.5) → `medium`, else `low`.
+   - `needsReview` if **any** of: category is `unknown`; confidence is `low`;
+     `sensitive.noul >= SENSITIVE_REVIEW_THRESHOLD` (0.5); the rule engine
+     said a different valid category with `high` confidence.
+   - `reason` is deterministic and ≤ 500 chars, e.g.
+     `receipt (p=0.91) → archive (p=0.84); importance medium (2.10/4), urgency none (0.20/4); review: sensitive (p=0.62)`.
+     Scores are shown to 2 decimals and the level is rounded from that
+     displayed value, so the two never disagree (2.499 → `2.50` → `high`).
+   - The result is validated with `EmailClassificationOutputSchema.parse`.
+3. The row is stored with `providerUsed: "typesafe"` and an audit envelope in
+   `rawResponse`:
+   `{ "questionSetVersion": CLASSIFICATION_QUESTION_SET_VERSION, "model": "<jev-…>", "raw": "<exact response body text>" }`.
+   Bump `CLASSIFICATION_QUESTION_SET_VERSION` in `classification.questions.ts`
+   whenever the state shape or question wording changes.
+
+Question set:
+
+| Question id         | Type   | Answers                                                                                                                                                        |
+| ------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `category`          | choice | exactly the `EmailCategorySchema` values; criteria `{ what, not_for, examples }` carry the newsletter-vs-marketing, receipt, security-alert and personal rules |
+| `recommendedAction` | choice | exactly the `RecommendedActionSchema` values (a recommendation only — nothing is executed)                                                                     |
+| `importance`        | score  | 5 levels `none → low → medium → high → critical`, each a concrete situation                                                                                    |
+| `urgency`           | score  | 5 levels `none → eventually → this_week → today → immediate`                                                                                                   |
+| `sensitive`         | noul   | P(security / credentials / legal / financial dispute / health — a human should double-check)                                                                   |
+
+Failure handling — **the TypeSafe path never writes a fallback row**. Every
+failure propagates, no row is written, and the email stays unclassified for
+a later run:
+
+- Provider / breaker / rate-limit errors (`AiProviderError`,
+  `BreakerOpenError`), as on the LLM path. `processUnclassified` still stops
+  the batch on `BreakerOpenError`.
+- `InvalidProviderResponseError` `unparseable` — the 2xx body is not JSON
+  (wrong endpoint, proxy). Systemic: a breaker failure (short hold), so the
+  next email short-circuits and the batch stops.
+- Per-email failures, handled identically by `processUnclassified`:
+  - `ProviderRequestRejectedError` — a TypeSafe 422 for this one email;
+  - `InvalidProviderResponseError` `invalid_shape` — JSON that fails the
+    response schema, or answers that cannot be mapped (missing answer, wrong
+    type, label outside the enum, non-finite score).
+
+  The breaker is not held. `processUnclassified` counts each under `errors`,
+  logs the email id, and moves on; after `MAX_CONSECUTIVE_REJECTIONS` (3) such
+  failures in a row (422 and invalid-shape mixed) it stops the batch
+  (remaining emails counted as `skipped`) and logs that the question set or
+  API contract is probably broken. Because these record a breaker success, a
+  systemic 422 / invalid-shape problem does **not** appear in
+  `GET /ai-providers/breaker` — watch for that log line and for `errors` in
+  the `POST /classification/run` response.
+
+`processUnclassified` walks unclassified emails in a deterministic order
+(`rawEmail.internalDate` descending, then id), newest first. Emails that
+keep failing per-email write no row and stay unclassified; newest-first sinks
+them to the tail so a consecutive-rejection stop defers only them, not new
+mail.
+
+A fallback row would mark the email "done" with a useless classification and
+never be retried. The LLM path keeps its fallback-row behavior for
+unparseable completions.
+
+Activate it with `POST /ai-providers { "provider": "typesafe", "apiKey": "…", "model": "jev-latest" }`
+then `POST /ai-providers/:id/activate`. See the ai-provider README for the
+breaker caveat on TypeSafe 422s.
+
+## Prompt Structure (LLM path)
 
 The LLM prompt includes:
 
@@ -108,7 +206,10 @@ The LLM prompt includes:
 
 ## Error Handling
 
-On any failure (LLM error, invalid JSON, schema validation failure):
+Provider, breaker and rate-limit failures propagate (no row written; retried
+next run). On the **LLM path**, a response that arrived but is unusable
+(invalid JSON, schema validation failure) produces a fallback row (the
+TypeSafe path never does — see [TypeSafe Path](#typesafe-path)):
 
 1. Classification is stored with `needsReview: true`
 2. `category` is set to `"unknown"`
@@ -118,15 +219,12 @@ On any failure (LLM error, invalid JSON, schema validation failure):
 
 ## Implementation Details
 
-### Mock LLM Provider
+### Provider selection
 
-The current implementation uses `MockLlmProvider` which simulates LLM responses based on keyword matching. This allows testing without API keys or external dependencies.
-
-To use a real LLM (OpenAI, Anthropic, etc.):
-
-1. Create a new provider implementing `LlmProvider` interface
-2. Replace `MockLlmProvider` in `ClassificationService`
-3. Add API key configuration to env schema
+The provider comes from the active `AiProviderConfig` row (see the
+ai-provider module). With no active config the LLM path uses
+`MockLlmProvider`, which returns keyword-based classifications without a
+network call.
 
 ### Schema Validation
 

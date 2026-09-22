@@ -7,6 +7,7 @@ export const AiProviderTypeSchema = z.enum([
   "google",
   "kimi",
   "deepseek",
+  "typesafe",
   "mock",
 ]);
 
@@ -113,6 +114,12 @@ export const AI_PROVIDER_METADATA: Record<
     availableModels: ["deepseek-chat", "deepseek-reasoner"],
     docsUrl: "https://platform.deepseek.com/docs",
   },
+  typesafe: {
+    displayName: "TypeSafe (Jev)",
+    defaultModel: "jev-latest",
+    availableModels: ["jev-latest"],
+    docsUrl: "https://docs.typesafe.ai",
+  },
   mock: {
     displayName: "Mock Provider (Testing)",
     defaultModel: "mock",
@@ -139,7 +146,8 @@ export interface LlmResponse {
 }
 
 export function supportsSystemPrompt(provider: AiProviderType): boolean {
-  return provider !== "mock";
+  // TypeSafe takes state + typed questions, not free-text prompts.
+  return provider !== "mock" && provider !== "typesafe";
 }
 
 export function requiresCustomEndpoint(provider: AiProviderType): boolean {
