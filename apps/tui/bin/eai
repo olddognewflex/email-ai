@@ -23,4 +23,8 @@ if [ ! -f "$entry" ]; then
   ( cd "$tui_dir/../.." && pnpm --filter @email-ai/tui build >&2 )
 fi
 
+# API runs under launchd on PORT 3100 (see com.odnf.email-ai.api.plist).
+# Default the TUI to match; allow override from the caller's env.
+export PORT="${PORT:-3100}"
+
 exec node "$entry" "$@"

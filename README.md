@@ -134,12 +134,13 @@ See [Digest Module README](apps/api/src/modules/digest/README.md) for full docum
 
 ## AI Provider Configuration
 
-Configure AI providers for email classification. Supports OpenAI, Anthropic (Claude), Mistral, Google (Gemini), Kimi, and DeepSeek.
+Configure AI providers for email classification. Supports TypeSafe (Jev), OpenAI, Anthropic (Claude), Mistral, Google (Gemini), Kimi, and DeepSeek.
 
 ### Supported Providers
 
 | Provider  | Type        | Default Model        | Notes                                       |
 | --------- | ----------- | -------------------- | ------------------------------------------- |
+| TypeSafe  | `typesafe`  | jev-latest           | Typed judgments, not a prompt; see below    |
 | OpenAI    | `openai`    | gpt-4o               | Requires API key from platform.openai.com   |
 | Anthropic | `anthropic` | claude-3-5-sonnet    | Requires API key from console.anthropic.com |
 | Mistral   | `mistral`   | mistral-large-latest | Requires API key from console.mistral.ai    |
@@ -226,6 +227,49 @@ curl -X POST http://localhost:3000/ai-providers \
   }'
 ```
 
+### TypeSafe (Jev)
+
+With `typesafe` active, classification makes one TypeSafe System One call per
+email instead of sending a free-text prompt. The call asks five typed
+questions:
+
+| Question            | Type   | Answer                                          |
+| ------------------- | ------ | ----------------------------------------------- |
+| `category`          | choice | one of the 11 categories (`unknown` = no match) |
+| `recommendedAction` | choice | one of the 10 actions (a recommendation only)   |
+| `importance`        | score  | 5 levels, `none` → `critical`                   |
+| `urgency`           | score  | 5 levels, `none` → `immediate`                  |
+| `sensitive`         | noul   | probability a human should double-check         |
+
+Code maps the answers to the stored fields. `confidence` comes from the choice
+confidences. `needsReview` is set when the category is `unknown`, confidence
+is low, the email looks sensitive, or TypeSafe disagrees with a
+high-confidence rule-engine result. `reason` is a fixed-format summary of the
+probabilities. `rawResponse` stores the question-set version, the model and
+the exact response body for audit.
+
+TypeSafe charges for input tokens only, and output tokens are free. A typical
+email is about 4–5k input tokens.
+
+```bash
+curl -X POST http://localhost:3000/ai-providers \
+  -H "Content-Type: application/json" \
+  -d '{ "provider": "typesafe", "apiKey": "<TYPESAFE_API_KEY>", "model": "jev-latest" }'
+
+curl -X POST http://localhost:3000/ai-providers/{id}/activate
+```
+
+`apiEndpoint` is optional and defaults to `https://api.typesafe.ai`.
+`temperature` and `maxTokens` are ignored. On the TypeSafe path a bad
+response never writes a fallback row: the email stays unclassified and is
+retried on the next run. See the
+[classification README](apps/api/src/modules/classification/README.md) for the
+question wording, review thresholds and failure handling.
+
+> The dev API and the launchd API share one database, so activating a
+> provider in one also activates it in the other. Both must run a build that
+> includes TypeSafe support before you activate `typesafe`.
+
 ### Rate Limiting
 
 The AI provider service includes automatic rate limiting and exponential backoff to prevent 429 errors from API providers. By default, it limits requests to 20 per minute with 3 retries and exponential backoff.
@@ -234,7 +278,7 @@ See the [AI Provider README](apps/api/src/modules/ai-provider/README.md) for det
 
 ### Classification Statistics
 
-Track how many emails have been classified and which path was used (AI provider vs fallback):
+Track how many emails have been classified and which path was used (AI provider vs fallback; TypeSafe rows show as `typesafe`):
 
 ```bash
 curl http://localhost:3000/classification/stats
@@ -264,7 +308,7 @@ Response:
 
 ### Fallback Behavior
 
-If no AI provider is configured or the active provider fails, the system automatically falls back to the Mock provider for testing. The Mock provider returns keyword-based classifications without making external API calls.
+If no AI provider is active, classification uses the Mock provider, which returns keyword-based classifications without making external API calls. If the active provider fails (network error, quota, auth), the error propagates and the email stays unclassified for a later run; the circuit breaker pauses AI calls where appropriate. Only an unparseable response on the LLM prompt path writes a `fallback` row (`unknown`, needs review).
 
 ## Workspace structure
 

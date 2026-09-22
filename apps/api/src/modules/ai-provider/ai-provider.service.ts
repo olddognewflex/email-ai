@@ -6,6 +6,7 @@ import {
   CreateAiProviderConfig,
   LlmRequest,
   LlmResponse,
+  TypeSafeJudgeRequest,
   UpdateAiProviderConfig,
 } from "@email-ai/shared";
 import { DatabaseService } from "../database/database.service";
@@ -18,11 +19,17 @@ import {
   GoogleProvider,
   KimiProvider,
   DeepSeekProvider,
+  TypeSafeClient,
+  TypeSafeJudgeResult,
+  TYPESAFE_DEFAULT_BASE_URL,
 } from "./providers";
 import { RateLimiter, RateLimiterConfig } from "./rate-limiter";
 import {
+  AiProviderConfigError,
   AiProviderError,
   BreakerOpenError,
+  InvalidProviderResponseError,
+  ProviderRequestRejectedError,
   categorizeError,
 } from "./ai-provider.error";
 import { CircuitBreaker } from "./circuit-breaker";
@@ -31,6 +38,7 @@ import { CircuitBreaker } from "./circuit-breaker";
 export class AiProviderService {
   private readonly logger = new Logger(AiProviderService.name);
   private providerInstances: Map<string, BaseLlmProvider> = new Map();
+  private typeSafeClients: Map<string, TypeSafeClient> = new Map();
   private rateLimiter: RateLimiter;
   private breaker: CircuitBreaker;
   private transientCapMs: number;
@@ -129,6 +137,7 @@ export class AiProviderService {
     });
 
     this.providerInstances.delete(id);
+    this.typeSafeClients.delete(id);
 
     return this.mapDbToConfig(config);
   }
@@ -157,6 +166,7 @@ export class AiProviderService {
     });
 
     this.providerInstances.delete(id);
+    this.typeSafeClients.delete(id);
   }
 
   /**
@@ -166,8 +176,84 @@ export class AiProviderService {
    * `{ content: "", error }`): transient errors are retried in-run by the
    * rate limiter, and quota/auth errors open the persisted breaker before
    * propagating. Callers should treat a throw as "no answer" and defer.
+   *
+   * Ordering: the active config is resolved and validated FIRST (a DB read,
+   * no network). A wrong provider type (TypeSafe active) is a local wiring
+   * error that waiting cannot fix, so it throws `AiProviderConfigError`
+   * without consuming a half-open probe. Only then is the breaker consulted
+   * — still before any network call. With no active config the mock
+   * provider is used, and an open breaker still throws `BreakerOpenError`.
    */
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    const config = await this.getActiveConfig();
+    if (config?.provider === "typesafe") {
+      throw new AiProviderConfigError(
+        "TypeSafe does not support free-text completion; use judge() " +
+          "(ClassificationService routes to it automatically)",
+      );
+    }
+    const provider = this.getProviderInstance(config);
+    return this.guarded(config?.provider ?? null, () =>
+      this.rateLimiter.execute(() => provider.complete(request)),
+    );
+  }
+
+  /**
+   * Run a TypeSafe (System One) judgment behind the same breaker + rate
+   * limiter as `complete()`. Requires the active provider to be `typesafe`
+   * (checked before the breaker, as in `complete()`).
+   *
+   * Throws like `complete()` on provider failure. A 2xx body that is not
+   * JSON throws `InvalidProviderResponseError` (kind `unparseable`) and
+   * counts as a breaker failure (`unknown` → short hold): systemic. JSON
+   * that fails the schema throws it with kind `invalid_shape`, and a 422
+   * throws `ProviderRequestRejectedError`; both are per-request and count
+   * as a breaker success (see `guarded`).
+   */
+  async judge(request: TypeSafeJudgeRequest): Promise<TypeSafeJudgeResult> {
+    return this.judgeWith(request, (result) => result);
+  }
+
+  /**
+   * `judge()` plus an `interpret` step that runs INSIDE the breaker guard.
+   * If `interpret` throws (e.g. an answer label outside the expected enum),
+   * it is rethrown as `InvalidProviderResponseError` (kind `invalid_shape`)
+   * and handled exactly like a schema-invalid body: per-request.
+   */
+  async judgeWith<T>(
+    request: TypeSafeJudgeRequest,
+    interpret: (result: TypeSafeJudgeResult) => T,
+  ): Promise<T> {
+    const client = await this.getTypeSafeClient();
+    return this.guarded("typesafe", async () => {
+      const result = await this.rateLimiter.execute(() =>
+        client.judge(request),
+      );
+      try {
+        return interpret(result);
+      } catch (error) {
+        if (error instanceof InvalidProviderResponseError) throw error;
+        throw new InvalidProviderResponseError(
+          "typesafe",
+          "invalid_shape",
+          `TypeSafe answers could not be interpreted: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          result.rawBody.slice(0, 10_000),
+        );
+      }
+    });
+  }
+
+  /**
+   * Breaker gate → fn → breaker bookkeeping. `fn` is expected to wrap its
+   * network call in `rateLimiter.execute` so in-run retries stay inside the
+   * breaker. Failures are categorized and recorded, then rethrown.
+   */
+  private async guarded<T>(
+    providerType: string | null,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const gate = this.breaker.canAttempt();
     if (!gate.allowed) {
       throw new BreakerOpenError(
@@ -176,15 +262,49 @@ export class AiProviderService {
       );
     }
 
-    const providerType = await this.getActiveProviderType();
+    // A per-request failure proves the server is reachable and the key
+    // valid, so it normally closes the breaker. Exception: when this call is
+    // the half-open probe of a breaker opened for QUOTA, a 422/invalid shape
+    // says nothing about whether the quota has reset — leave the probe guard
+    // to expire rather than closing the breaker on it.
+    const recordPerRequestOutcome = () => {
+      const isQuotaProbe =
+        gate.state.status === "half_open" && gate.state.reason === "quota";
+      if (!isQuotaProbe) this.breaker.recordSuccess();
+    };
+
     try {
-      const provider = await this.getProviderInstance();
-      const result = await this.rateLimiter.execute(() =>
-        provider.complete(request),
-      );
+      const result = await fn();
       this.breaker.recordSuccess();
       return result;
     } catch (error) {
+      // TypeSafe 422: the service is up and the key is valid, but it
+      // rejected THIS request. Per-item, not systemic — don't hold the
+      // breaker (the 4xx → auth → 12h rule would stall the whole pipeline).
+      // The rate limiter already rethrew it without retrying (4xx ≠ transient).
+      if (
+        error instanceof AiProviderError &&
+        error.provider === "typesafe" &&
+        error.status === 422
+      ) {
+        recordPerRequestOutcome();
+        throw new ProviderRequestRejectedError(
+          error.provider,
+          error.status,
+          error.body,
+        );
+      }
+      // Valid JSON with the wrong shape (or unmappable answers) can be
+      // specific to one email. Holding the breaker would end the batch at
+      // that email on every run and starve everything after it. Only an
+      // `unparseable` (non-JSON) body falls through as a systemic failure.
+      if (
+        error instanceof InvalidProviderResponseError &&
+        error.kind === "invalid_shape"
+      ) {
+        recordPerRequestOutcome();
+        throw error;
+      }
       const category = categorizeError(error, {
         transientCapMs: this.transientCapMs,
       });
@@ -240,9 +360,9 @@ export class AiProviderService {
     return config?.provider ?? null;
   }
 
-  private async getProviderInstance(): Promise<BaseLlmProvider> {
-    const config = await this.getActiveConfig();
-
+  private getProviderInstance(
+    config: AiProviderConfig | null,
+  ): BaseLlmProvider {
     if (!config) {
       this.logger.warn("No active AI provider configured, using mock");
       return new MockLlmProvider();
@@ -257,6 +377,29 @@ export class AiProviderService {
     this.providerInstances.set(config.id, provider);
 
     return provider;
+  }
+
+  private async getTypeSafeClient(): Promise<TypeSafeClient> {
+    const config = await this.getActiveConfig();
+    if (!config || config.provider !== "typesafe") {
+      throw new AiProviderConfigError(
+        `TypeSafe judgment requires the active AI provider to be "typesafe" ` +
+          `(active: ${config?.provider ?? "none"})`,
+      );
+    }
+
+    const cached = this.typeSafeClients.get(config.id);
+    if (cached) {
+      return cached;
+    }
+
+    const client = new TypeSafeClient(
+      config.apiKey,
+      config.model,
+      config.apiEndpoint ?? TYPESAFE_DEFAULT_BASE_URL,
+    );
+    this.typeSafeClients.set(config.id, client);
+    return client;
   }
 
   private createProviderInstance(config: AiProviderConfig): BaseLlmProvider {
@@ -292,6 +435,13 @@ export class AiProviderService {
           config.apiKey,
           config.model,
           config.apiEndpoint ?? "https://api.deepseek.com/v1",
+        );
+      case "typesafe":
+        // TypeSafe answers typed questions, not free-text prompts. Failing
+        // loudly beats silently producing mock classifications.
+        throw new AiProviderConfigError(
+          "TypeSafe does not support free-text completion; use judge() " +
+            "(ClassificationService routes to it automatically)",
         );
       case "mock":
         return new MockLlmProvider();

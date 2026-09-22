@@ -61,6 +61,91 @@ export class BreakerOpenError extends Error {
   }
 }
 
+/**
+ * Why a 2xx response was unusable:
+ * - `unparseable`   — the body is not JSON at all (wrong `apiEndpoint`
+ *   returning 200 HTML, a captive proxy). Systemic: every request will fail.
+ * - `invalid_shape` — valid JSON that fails the response schema, or answers
+ *   that cannot be interpreted (label outside the enum, missing answer).
+ *   May be specific to one email, so it is handled per item.
+ */
+export type InvalidResponseKind = "unparseable" | "invalid_shape";
+
+/**
+ * The provider answered with HTTP 2xx but the body was unusable. Callers
+ * write NO row either way, so the email is retried later rather than
+ * poisoned with a fallback. `AiProviderService` records an `unparseable`
+ * body as a breaker failure (`unknown`, short hold → the batch stops) and
+ * an `invalid_shape` one like a 422 (breaker success; the batch continues).
+ */
+export class InvalidProviderResponseError extends Error {
+  readonly provider: string;
+  readonly kind: InvalidResponseKind;
+  /** Raw response body (truncated), for logs. */
+  readonly rawBody?: string;
+
+  constructor(
+    provider: string,
+    kind: InvalidResponseKind,
+    message: string,
+    rawBody?: string,
+  ) {
+    super(message);
+    this.name = "InvalidProviderResponseError";
+    this.provider = provider;
+    this.kind = kind;
+    this.rawBody = rawBody;
+  }
+}
+
+/**
+ * True for failures that concern ONE request/email rather than the provider
+ * as a whole: a 422 rejection or an `invalid_shape` response. Batch callers
+ * skip the item (no row) and continue, stopping only after a run of them.
+ */
+export function isPerRequestFailure(
+  error: unknown,
+): error is ProviderRequestRejectedError | InvalidProviderResponseError {
+  return (
+    error instanceof ProviderRequestRejectedError ||
+    (error instanceof InvalidProviderResponseError &&
+      error.kind === "invalid_shape")
+  );
+}
+
+/**
+ * The provider is reachable and the key valid, but it rejected THIS request
+ * (TypeSafe HTTP 422 — e.g. state/question validation). Per-request, not
+ * systemic: the breaker records a success and callers skip just this item.
+ */
+export class ProviderRequestRejectedError extends Error {
+  readonly provider: string;
+  readonly status: number;
+  /** Response body (truncated) explaining the rejection. */
+  readonly body?: string;
+
+  constructor(provider: string, status: number, body?: string) {
+    const snippet = body ? ` - ${body.slice(0, 300)}` : "";
+    super(`${provider} rejected the request: ${status}${snippet}`);
+    this.name = "ProviderRequestRejectedError";
+    this.provider = provider;
+    this.status = status;
+    this.body = body?.slice(0, 2000);
+  }
+}
+
+/**
+ * The active provider cannot serve the requested operation (e.g. `complete()`
+ * with TypeSafe active, or `judge()` with an LLM active). Raised before any
+ * network call; it is a local wiring problem, so it never touches the breaker.
+ */
+export class AiProviderConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AiProviderConfigError";
+  }
+}
+
 export interface CategorizeConfig {
   /** 429s whose reset hint is within this window are transient; longer = quota. */
   transientCapMs: number;
