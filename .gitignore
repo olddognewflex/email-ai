@@ -34,3 +34,6 @@ yarn-error.log*
 
 # pnpm
 .pnpm-store
+
+# mex code graph (regenerated each session)
+.mex/graph.db
