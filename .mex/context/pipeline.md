@@ -114,11 +114,12 @@ row immediately if one exists, then branches on the **active provider type**:
   `importance` and `urgency` (5-level scores), `sensitive` (noul) — sent in one
   `AiProviderService.judgeWith` call. `classification.judgments.ts` `mapJudgmentsToOutput` maps
   answers deterministically inside the breaker guard: levels are the 2-decimal score rounded and
-  clamped; confidence is the band of `min(category, action)` confidence (≥0.75 high, ≥0.5 medium,
+  clamped; confidence is the band of the category confidence only (≥0.75 high, ≥0.5 medium,
   else low); `needsReview` fires on `unknown`, low confidence, P(sensitive) ≥ 0.5, or a
-  `high`-confidence rule category that disagrees. The row is stored with
-  `providerUsed: "typesafe"` and `rawResponse` = `{ questionSetVersion, model, raw }` (the exact
-  response body plus `CLASSIFICATION_QUESTION_SET_VERSION`).
+  `high`-confidence rule category that disagrees, except for pairs in `RULE_COMPATIBLE_CATEGORIES`
+  (`newsletter` ↔ `marketing` / `notification` / `social`). The row is stored with `providerUsed: "typesafe"` and
+  `rawResponse` = `{ questionSetVersion, reviewPolicyVersion, model, raw }` (the exact response
+  body plus both version constants).
 
 The failure split is deliberate and load-bearing:
 - Provider, breaker, or rate-limit failure → **the error propagates**, no row is written, the

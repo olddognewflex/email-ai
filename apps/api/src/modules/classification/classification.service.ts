@@ -12,7 +12,10 @@ import {
   CLASSIFICATION_QUESTION_SET_VERSION,
   buildClassificationJudgeRequest,
 } from "./classification.questions";
-import { mapJudgmentsToOutput } from "./classification.judgments";
+import {
+  REVIEW_POLICY_VERSION,
+  mapJudgmentsToOutput,
+} from "./classification.judgments";
 import { AiProviderService } from "../ai-provider/ai-provider.service";
 import {
   BreakerOpenError,
@@ -125,9 +128,11 @@ export class ClassificationService {
       request,
       ({ response, rawBody }) => ({
         output: mapJudgmentsToOutput(response.answers, input).output,
-        // Audit envelope: exact body text + the question set that produced it.
+        // Audit envelope: exact body text + the question set and review
+        // policy that produced it.
         rawResponse: JSON.stringify({
           questionSetVersion: CLASSIFICATION_QUESTION_SET_VERSION,
+          reviewPolicyVersion: REVIEW_POLICY_VERSION,
           model: response.model,
           raw: rawBody,
         }),

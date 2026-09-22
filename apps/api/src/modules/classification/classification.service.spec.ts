@@ -13,6 +13,7 @@ import {
   MAX_CONSECUTIVE_REJECTIONS,
 } from "./classification.service";
 import { CLASSIFICATION_QUESTION_SET_VERSION } from "./classification.questions";
+import { REVIEW_POLICY_VERSION } from "./classification.judgments";
 
 const normalized = {
   id: "n1",
@@ -174,6 +175,7 @@ describe("ClassificationService — TypeSafe path", () => {
     const { create } = db.emailClassification.upsert.mock.calls[0][0];
     expect(JSON.parse(create.rawResponse)).toEqual({
       questionSetVersion: CLASSIFICATION_QUESTION_SET_VERSION,
+      reviewPolicyVersion: REVIEW_POLICY_VERSION,
       model: "jev-1.13.0",
       raw: rawBody,
     });

@@ -241,12 +241,16 @@ questions:
 | `urgency`           | score  | 5 levels, `none` → `immediate`                  |
 | `sensitive`         | noul   | probability a human should double-check         |
 
-Code maps the answers to the stored fields. `confidence` comes from the choice
-confidences. `needsReview` is set when the category is `unknown`, confidence
+Code maps the answers to the stored fields. `confidence` comes from the
+category confidence alone, because several actions are often equally
+reasonable. `needsReview` is set when the category is `unknown`, confidence
 is low, the email looks sensitive, or TypeSafe disagrees with a
-high-confidence rule-engine result. `reason` is a fixed-format summary of the
-probabilities. `rawResponse` stores the question-set version, the model and
-the exact response body for audit.
+high-confidence rule-engine result. The rule engine labels every bulk sender
+a newsletter, so it doesn't count as a disagreement when TypeSafe picks
+`marketing`, `notification` or `social` instead.
+`reason` is a fixed-format summary of the probabilities. `rawResponse` stores
+the question-set version, the review-policy version, the model and the exact
+response body for audit.
 
 TypeSafe charges for input tokens only, and output tokens are free. A typical
 email is about 4–5k input tokens.
