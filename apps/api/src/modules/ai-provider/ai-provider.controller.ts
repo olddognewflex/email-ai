@@ -32,6 +32,12 @@ export class AiProviderController {
     return this.aiProviderService.getAvailableProviders();
   }
 
+  // Declared before ":id" so "breaker" is not captured as a provider id.
+  @Get("breaker")
+  getBreakerStatus() {
+    return this.aiProviderService.getBreakerStatus();
+  }
+
   @Get(":id")
   async getConfig(@Param("id") id: string) {
     const config = await this.aiProviderService.getConfig(id);
