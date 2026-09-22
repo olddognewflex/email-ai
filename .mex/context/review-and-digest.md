@@ -118,12 +118,19 @@ whole system. Three launchd jobs drive it:
 - `com.odnf.email-ai.hourly-sync` — the `sync` stage every hour on the hour.
 - `com.odnf.email-ai.daily-digest` — the `digest` stage at 07:30.
 
+A fourth job, `com.odnf.email-ai.log-rotate`, runs `scripts/rotate-logs.sh` daily at 03:15. It
+rotates any `~/.local/state/email-ai/*.log` over 50 MB to `<name>.1.gz` and keeps 5 copies. It
+uses copy-truncate (copy aside, empty the live file, gzip the copy) because launchd opens each
+job's log once in append mode and keeps it open. Renaming the file, which is what `newsyslog`
+does, would leave the API writing into the renamed file. Its own output goes to
+`log-rotate.log`, which it never rotates.
+
 The script waits for `/health` to report `status: ok` and `db: ok` before doing anything,
 classifies with `?since=<yesterday>` to catch overnight mail the default cutoff would drop,
 regenerates **both** yesterday's and today's digest each run, and pipes actionable emails into
 the `qi` CLI — deduplicated by classification id in
 `~/.local/state/email-ai/captured-ids.txt`. Delete a line from that file to allow a re-capture.
 
-All three plists hardcode absolute `/Users/raymonddoran/...` paths and macOS-only `date -v-1d`
+All four plists hardcode absolute `/Users/raymonddoran/...` paths and macOS-only `date -v-1d`
 arithmetic, and logs go to `~/.local/state/email-ai/*.log`. This deployment is not portable as
 written.
