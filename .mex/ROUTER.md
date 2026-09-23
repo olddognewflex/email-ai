@@ -45,7 +45,8 @@ Then read this file fully before doing anything else in this session.
   an Obsidian vault, with actionable items captured into the `qi` CLI.
 - Email accounts with both stored-password (AES-256-GCM) and Gmail XOAUTH2 auth, including a
   `needsReauth` re-consent loop.
-- Automated operation on macOS via three launchd jobs (always-on API, hourly sync, 07:30 digest).
+- Automated operation on macOS via four launchd jobs (always-on API, hourly sync, 07:30 digest,
+  03:15 log rotation).
 
 **Not yet built:**
 - Any authentication or authorization on the API — every endpoint is open and localhost-only.
