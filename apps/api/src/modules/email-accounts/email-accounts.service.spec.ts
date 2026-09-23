@@ -1,4 +1,5 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { AppConfigService } from '../config/config.service';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -17,6 +18,7 @@ function makeDb() {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
+      delete: jest.fn(),
     },
   };
 }
@@ -223,5 +225,41 @@ describe('getImapCredentials', () => {
       where: { id: 'acc1' },
       data: { needsReauth: true },
     });
+  });
+});
+
+describe('remove', () => {
+  const withCounts = (rawEmails: number, mailboxActions: number) => ({
+    id: 'acc1',
+    _count: { rawEmails, mailboxActions },
+  });
+
+  it('deletes an account with no emails and no mailbox actions', async () => {
+    const { service, db } = makeService();
+    db.emailAccount.findUnique.mockResolvedValue(withCounts(0, 0));
+    await service.remove('acc1');
+    expect(db.emailAccount.delete).toHaveBeenCalledWith({ where: { id: 'acc1' } });
+  });
+
+  it('409s (not 500) for an account with mailbox-write history', async () => {
+    const { service, db } = makeService();
+    db.emailAccount.findUnique.mockResolvedValue(withCounts(0, 3));
+    await expect(service.remove('acc1')).rejects.toBeInstanceOf(ConflictException);
+    expect(db.emailAccount.delete).not.toHaveBeenCalled();
+  });
+
+  it('maps a racing FK violation (P2003) to 409', async () => {
+    const { service, db } = makeService();
+    db.emailAccount.findUnique.mockResolvedValue(withCounts(0, 0));
+    db.emailAccount.delete.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('fk', { code: 'P2003', clientVersion: 't' }),
+    );
+    await expect(service.remove('acc1')).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('404 for an unknown account', async () => {
+    const { service, db } = makeService();
+    db.emailAccount.findUnique.mockResolvedValue(null);
+    await expect(service.remove('nope')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -22,7 +22,7 @@ edges:
     condition: when the task touches the review queue, the TUI, the digest, or launchd automation
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
-last_updated: 2026-08-10
+last_updated: 2026-09-23
 ---
 
 # Session Bootstrap
@@ -47,10 +47,21 @@ Then read this file fully before doing anything else in this session.
   `needsReauth` re-consent loop.
 - Automated operation on macOS via four launchd jobs (always-on API, hourly sync, 07:30 digest,
   03:15 log rotation).
+- Sender rules (`/sender-rules`): classify matching mail before any AI call, with look-alike
+  family suggestions and TUI views.
+- One audited mailbox write: `trash` sender rules move matching INBOX mail to the
+  server-advertised `\Trash` via `POST /sender-rules/apply` (dry run by default; live only
+  with `MAILBOX_WRITES_ENABLED=true`), logged in `MailboxAction` and reversible with
+  `POST /mailbox-actions/:id/undo`. The hourly job runs apply after classify. One active move
+  per message is a DB constraint; lost outcomes become `unknown` and are resolved by the
+  read-only `POST /mailbox-actions/reconcile`.
 
 **Not yet built:**
-- Any authentication or authorization on the API — every endpoint is open and localhost-only.
-- Any mailbox write-back: the recommended actions (archive, delete, unsubscribe) are never
+- Any authentication or authorization on the API — every endpoint is open, bound to 127.0.0.1
+  with a Host-header check; every non-GET request needs the `X-Email-AI-Client` header (CSRF
+  guard). The HTML review UI's GET approve/reject links are the known residual.
+- Mailbox write-back beyond the rule-driven move to Trash: the recommended actions (archive,
+  delete, unsubscribe) are never
   executed, only recorded.
 - A linter. Every package's `lint` script is a stub `echo`; typecheck and unit tests are the
   entire quality gate.

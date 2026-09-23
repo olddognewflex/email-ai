@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,6 +11,11 @@ import { ImapFlow } from 'imapflow';
 import { DatabaseService } from '../database/database.service';
 import { AppConfigService } from '../config/config.service';
 import { EmailAccountsService } from '../email-accounts/email-accounts.service';
+import {
+  IMAP_CLIENT_FACTORY,
+  ImapClientFactory,
+  createImapClient,
+} from './imap-client.factory';
 import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MAILBOX,
@@ -26,6 +32,8 @@ export class EmailSyncService implements OnModuleDestroy {
     private readonly db: DatabaseService,
     private readonly config: AppConfigService,
     private readonly emailAccounts: EmailAccountsService,
+    @Inject(IMAP_CLIENT_FACTORY)
+    private readonly createClient: ImapClientFactory = createImapClient,
   ) {}
 
   async syncAccount(
@@ -63,16 +71,7 @@ export class EmailSyncService implements OnModuleDestroy {
       data: { status: SyncStatus.SYNCING },
     });
 
-    const client = new ImapFlow({
-      host: account.host,
-      port: account.port,
-      secure: account.secure,
-      auth:
-        credentials.kind === 'oauth'
-          ? { user: account.username, accessToken: credentials.accessToken }
-          : { user: account.username, pass: credentials.password },
-      logger: false,
-    });
+    const client = this.createClient(account, credentials);
 
     let fetchedCount = 0;
     let storedCount = 0;

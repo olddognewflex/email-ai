@@ -2,6 +2,7 @@ import { INestApplication, Logger } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { Prisma } from "@prisma/client";
 import request from "supertest";
+import { ClientHeaderGuard } from "../../common/client-header";
 import { DatabaseService } from "../database/database.service";
 import { SenderRulesController } from "./sender-rules.controller";
 import { SenderRulesService } from "./sender-rules.service";
@@ -129,6 +130,7 @@ describe("SenderRulesController (HTTP)", () => {
       providers: [SenderRulesService, { provide: DatabaseService, useValue: db }],
     }).compile();
     app = moduleRef.createNestApplication();
+    app.useGlobalGuards(new ClientHeaderGuard());
     await app.init();
     service = moduleRef.get(SenderRulesService);
   });
@@ -138,7 +140,7 @@ describe("SenderRulesController (HTTP)", () => {
   });
 
   const post = (body: object) =>
-    request(app.getHttpServer()).post("/sender-rules").send(body);
+    request(app.getHttpServer()).post("/sender-rules").set("X-Email-AI-Client", "test").send(body);
 
   describe("POST /sender-rules", () => {
     it("creates a rule: 201 with the rule and no warnings, pattern lowercased", async () => {
@@ -354,6 +356,35 @@ describe("SenderRulesController (HTTP)", () => {
     });
   });
 
+  describe("X-Email-AI-Client (global guard)", () => {
+    it.each([
+      ["POST", "/sender-rules", { pattern: "kstgadgets.com", matchType: "domain", category: "marketing" }],
+      ["POST", "/sender-rules/preview", { pattern: "news.*.com", matchType: "glob" }],
+      ["PATCH", "/sender-rules/any", { note: "x" }],
+      ["DELETE", "/sender-rules/any", undefined],
+    ] as const)("%s %s without the header is 403 and changes nothing", async (method, path, body) => {
+      const agent = request(app.getHttpServer());
+      const req =
+        method === "POST" ? agent.post(path) : method === "PATCH" ? agent.patch(path) : agent.delete(path);
+      const res = await (body ? req.send(body) : req).expect(403);
+      expect(res.body.message).toMatch(/X-Email-AI-Client/);
+      expect(db.rows.size).toBe(0);
+      expect(db.senderRule.create).not.toHaveBeenCalled();
+    });
+
+    it("a blank header is rejected too", async () => {
+      await request(app.getHttpServer())
+        .post("/sender-rules")
+        .set("X-Email-AI-Client", "  ")
+        .send({ pattern: "kstgadgets.com", matchType: "domain", category: "marketing" })
+        .expect(403);
+    });
+
+    it("GET needs no header", async () => {
+      await request(app.getHttpServer()).get("/sender-rules").expect(200);
+    });
+  });
+
   describe("PATCH /sender-rules/:id", () => {
     it("re-validates the stored pattern when matchType changes", async () => {
       const created = await post({
@@ -365,7 +396,7 @@ describe("SenderRulesController (HTTP)", () => {
 
       // A glob pattern is not a valid domain.
       const res = await request(app.getHttpServer())
-        .patch(`/sender-rules/${id}`)
+        .patch(`/sender-rules/${id}`).set("X-Email-AI-Client", "test")
         .send({ matchType: "domain" })
         .expect(400);
       expect(JSON.stringify(res.body)).toContain("hostname");
@@ -373,7 +404,7 @@ describe("SenderRulesController (HTTP)", () => {
 
       // Changing both together is fine.
       const ok = await request(app.getHttpServer())
-        .patch(`/sender-rules/${id}`)
+        .patch(`/sender-rules/${id}`).set("X-Email-AI-Client", "test")
         .send({ matchType: "domain", pattern: "News.Example.com" })
         .expect(200);
       expect(ok.body.rule).toMatchObject({
@@ -391,13 +422,13 @@ describe("SenderRulesController (HTTP)", () => {
         category: "marketing",
       });
       const res = await request(app.getHttpServer())
-        .patch(`/sender-rules/${created.body.rule.id}`)
+        .patch(`/sender-rules/${created.body.rule.id}`).set("X-Email-AI-Client", "test")
         .send({ pattern: "songkick.com", matchType: "domain_suffix" })
         .expect(200);
       expect(res.body.warnings[0]).toContain("songkick.com");
 
       await request(app.getHttpServer())
-        .patch("/sender-rules/nope")
+        .patch("/sender-rules/nope").set("X-Email-AI-Client", "test")
         .send({ enabled: false })
         .expect(404);
     });
@@ -410,7 +441,7 @@ describe("SenderRulesController (HTTP)", () => {
         category: "marketing",
       });
       await request(app.getHttpServer())
-        .patch(`/sender-rules/${b.body.rule.id}`)
+        .patch(`/sender-rules/${b.body.rule.id}`).set("X-Email-AI-Client", "test")
         .send({ pattern: "a-promo.com" })
         .expect(409);
     });
@@ -424,15 +455,15 @@ describe("SenderRulesController (HTTP)", () => {
         category: "marketing",
       });
       const id = created.body.rule.id;
-      await request(app.getHttpServer()).delete(`/sender-rules/${id}`).expect(204);
-      await request(app.getHttpServer()).delete(`/sender-rules/${id}`).expect(404);
+      await request(app.getHttpServer()).delete(`/sender-rules/${id}`).set("X-Email-AI-Client", "test").expect(204);
+      await request(app.getHttpServer()).delete(`/sender-rules/${id}`).set("X-Email-AI-Client", "test").expect(404);
     });
   });
 
   describe("POST /sender-rules/preview", () => {
     it("counts matching stored mail by domain, top first, with protected hits", async () => {
       const res = await request(app.getHttpServer())
-        .post("/sender-rules/preview")
+        .post("/sender-rules/preview").set("X-Email-AI-Client", "test")
         .send({ pattern: "news.*.com", matchType: "glob" })
         .expect(200);
 
@@ -457,7 +488,7 @@ describe("SenderRulesController (HTTP)", () => {
 
     it("uses from addresses for address-targeted patterns, case-insensitively", async () => {
       const res = await request(app.getHttpServer())
-        .post("/sender-rules/preview")
+        .post("/sender-rules/preview").set("X-Email-AI-Client", "test")
         .send({ pattern: "Team@KickstarGo.com", matchType: "address" })
         .expect(200);
       expect(res.body).toEqual({
@@ -475,7 +506,7 @@ describe("SenderRulesController (HTTP)", () => {
         { pattern: "*.com", matchType: "glob" },
       ]) {
         await request(app.getHttpServer())
-          .post("/sender-rules/preview")
+          .post("/sender-rules/preview").set("X-Email-AI-Client", "test")
           .send(body)
           .expect(400);
       }

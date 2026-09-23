@@ -27,9 +27,10 @@ model EmailAccount {
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
-  syncStates    SyncState[]
-  rawEmails     RawEmail[]
-  emailMessages EmailMessage[]
+  syncStates     SyncState[]
+  rawEmails      RawEmail[]
+  emailMessages  EmailMessage[]
+  mailboxActions MailboxAction[]
 }
 
 model SyncState {
@@ -59,8 +60,9 @@ model RawEmail {
   uidValidity  String?
   createdAt    DateTime @default(now())
 
-  account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  parsed  ParsedEmail?
+  account        EmailAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  parsed         ParsedEmail?
+  mailboxActions MailboxAction[]
 
   @@unique([accountId, mailbox, uid])
 }
@@ -167,9 +169,76 @@ model SenderRule {
   updatedAt DateTime            @updatedAt
 
   classifications EmailClassification[]
+  mailboxActions  MailboxAction[]
 
   @@unique([matchType, pattern])
   @@index([enabled])
+}
+
+enum MailboxActionType {
+  move_to_trash
+  restore
+}
+
+enum MailboxActionStatus {
+  pending
+  succeeded
+  failed
+  skipped
+  undone
+  /// The IMAP outcome could not be established (response lost and the
+  /// re-check failed). Never retried; resolved by POST /mailbox-actions/reconcile.
+  unknown
+}
+
+/// Audit log of every IMAP mailbox mutation. A row is written (pending)
+/// BEFORE the IMAP MOVE and updated after it. Dry-runs write no rows.
+model MailboxAction {
+  id                String              @id @default(cuid())
+  action            MailboxActionType
+  status            MailboxActionStatus
+  accountId         String
+  /// SetNull keeps the audit row if the RawEmail is later removed.
+  rawEmailId        String?
+  /// SetNull keeps the audit row if the rule is deleted.
+  senderRuleId      String?
+  /// Set on a `restore` row: the `move_to_trash` action it undid.
+  undoOfId          String?             @unique
+  sourceMailbox     String
+  sourceUid         Int
+  /// UIDVALIDITY as a decimal string (unsigned 32-bit), like RawEmail.
+  sourceUidValidity String?
+  destMailbox       String?
+  /// Null when the server did not report COPYUID (no UIDPLUS).
+  destUid           Int?
+  destUidValidity   String?
+  /// RFC 5322 Message-ID used to verify identity before moving.
+  messageId         String?
+  fromAddress       String?
+  subject           String?
+  /// Gmail X-GM-LABELS at move time. Recorded only; not re-applied on undo.
+  gmailLabels       String[]
+  error             String?
+  undoneAt          DateTime?
+  createdAt         DateTime            @default(now())
+
+  /// Restrict: an account with mailbox-write history cannot be deleted,
+  /// so the audit trail survives.
+  account    EmailAccount   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  rawEmail   RawEmail?      @relation(fields: [rawEmailId], references: [id], onDelete: SetNull)
+  senderRule SenderRule?    @relation(fields: [senderRuleId], references: [id], onDelete: SetNull)
+  undoOf     MailboxAction? @relation("MailboxActionUndo", fields: [undoOfId], references: [id], onDelete: SetNull)
+  undoneBy   MailboxAction? @relation("MailboxActionUndo")
+  // Hand-written in migration 20260923162327_mailbox_action_unknown_restrict_one_active
+  // (Prisma cannot express partial indexes): at most one active
+  // (status NOT IN failed/skipped/undone) move_to_trash per
+  // (accountId, sourceUidValidity, sourceUid) and per rawEmailId.
+
+  @@index([accountId, createdAt])
+  @@index([rawEmailId])
+  @@index([senderRuleId])
+  @@index([status])
+  @@index([accountId, messageId])
 }
 
 model ReviewDecision {
