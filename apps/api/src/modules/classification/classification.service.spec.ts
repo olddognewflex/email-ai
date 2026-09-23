@@ -1,4 +1,7 @@
-import { TypeSafeResponse } from "@email-ai/shared";
+import {
+  EmailClassificationOutputSchema,
+  TypeSafeResponse,
+} from "@email-ai/shared";
 import { DatabaseService } from "../database/database.service";
 import { AiProviderService } from "../ai-provider/ai-provider.service";
 import {
@@ -14,6 +17,11 @@ import {
 } from "./classification.service";
 import { CLASSIFICATION_QUESTION_SET_VERSION } from "./classification.questions";
 import { REVIEW_POLICY_VERSION } from "./classification.judgments";
+import { SenderRulesService } from "../sender-rules/sender-rules.service";
+import {
+  MatchableSenderRule,
+  compileRules,
+} from "../sender-rules/sender-rule-matcher";
 
 const normalized = {
   id: "n1",
@@ -89,7 +97,11 @@ function judgeWithFor(result: TypeSafeJudgeResult) {
   };
 }
 
-function makeService(providerType: string | null, ids = ["n1", "n2"]) {
+function makeService(
+  providerType: string | null,
+  ids = ["n1", "n2"],
+  rules: MatchableSenderRule[] = [],
+) {
   const db = {
     normalizedEmail: {
       findUnique: jest.fn().mockResolvedValue(normalized),
@@ -113,11 +125,15 @@ function makeService(providerType: string | null, ids = ["n1", "n2"]) {
     complete: jest.fn(),
     getBreakerStatus: jest.fn().mockReturnValue({ open: false }),
   };
+  const senderRules = {
+    getMatcher: jest.fn().mockResolvedValue(compileRules(rules)),
+  };
   const service = new ClassificationService(
     db as unknown as DatabaseService,
     ai as unknown as AiProviderService,
+    senderRules as unknown as SenderRulesService,
   );
-  return { service, db, ai };
+  return { service, db, ai, senderRules };
 }
 
 const rejected = () =>
@@ -247,6 +263,7 @@ describe("ClassificationService — TypeSafe path", () => {
       errors: 0,
       needsReview: 0,
       skipped: 2,
+      ruleClassified: 0,
     });
     // Broke out after the first email rather than trying the second.
     expect(ai.judgeWith).toHaveBeenCalledTimes(2); // 1 direct + 1 in batch
@@ -284,6 +301,7 @@ describe("ClassificationService — per-email invalid shapes", () => {
       errors: 1,
       needsReview: 0,
       skipped: 0,
+      ruleClassified: 0,
     });
     expect(ai.judgeWith).toHaveBeenCalledTimes(3);
     expect(db.emailClassification.upsert).toHaveBeenCalledTimes(2);
@@ -304,6 +322,7 @@ describe("ClassificationService — per-email invalid shapes", () => {
       errors: 1,
       needsReview: 0,
       skipped: 2,
+      ruleClassified: 0,
     });
     expect(ai.judgeWith).toHaveBeenCalledTimes(2);
     expect(db.emailClassification.upsert).not.toHaveBeenCalled();
@@ -327,6 +346,7 @@ describe("ClassificationService — per-email invalid shapes", () => {
       errors: MAX_CONSECUTIVE_REJECTIONS,
       needsReview: 0,
       skipped: ids.length - MAX_CONSECUTIVE_REJECTIONS,
+      ruleClassified: 0,
     });
     expect(ai.judgeWith).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REJECTIONS);
     expect(db.emailClassification.upsert).not.toHaveBeenCalled();
@@ -346,6 +366,7 @@ describe("ClassificationService — per-email rejections (422)", () => {
       errors: 1,
       needsReview: 0,
       skipped: 0,
+      ruleClassified: 0,
     });
     expect(ai.judgeWith).toHaveBeenCalledTimes(3);
     expect(db.emailClassification.upsert).toHaveBeenCalledTimes(2);
@@ -363,6 +384,7 @@ describe("ClassificationService — per-email rejections (422)", () => {
       errors: MAX_CONSECUTIVE_REJECTIONS,
       needsReview: 0,
       skipped: ids.length - MAX_CONSECUTIVE_REJECTIONS,
+      ruleClassified: 0,
     });
     expect(ai.judgeWith).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REJECTIONS);
     expect(db.emailClassification.upsert).not.toHaveBeenCalled();
@@ -386,6 +408,7 @@ describe("ClassificationService — per-email rejections (422)", () => {
       errors: 4,
       needsReview: 0,
       skipped: 0,
+      ruleClassified: 0,
     });
     expect(ai.judgeWith).toHaveBeenCalledTimes(5);
   });
@@ -446,5 +469,268 @@ describe("ClassificationService — LLM path", () => {
     await expect(service.classifyEmail("n1")).resolves.toBe(existing);
     expect(ai.judgeWith).not.toHaveBeenCalled();
     expect(ai.complete).not.toHaveBeenCalled();
+  });
+});
+
+describe("ClassificationService — sender rules", () => {
+  const promoRule: MatchableSenderRule = {
+    id: "rule-promo",
+    pattern: "news.*.com",
+    matchType: "glob",
+    category: "marketing",
+    action: "classify",
+    createdAt: new Date("2026-09-01T00:00:00Z"),
+  };
+
+  const promoEmail = {
+    ...normalized,
+    id: "n-promo",
+    senderDomain: "news.getthefinnewsnow.com",
+    parsedEmail: {
+      ...normalized.parsedEmail,
+      fromAddress: "reply@news.getthefinnewsnow.com",
+    },
+  };
+
+  /** Batch rows as the widened processUnclassified select returns them. */
+  const candidate = (e: typeof normalized) => ({
+    id: e.id,
+    senderDomain: e.senderDomain,
+    parsedEmail: { fromAddress: e.parsedEmail.fromAddress },
+  });
+
+  it("a rule match writes a sender-rule row without touching the AI provider", async () => {
+    const { service, db, ai } = makeService("typesafe", [], [promoRule]);
+    db.normalizedEmail.findUnique.mockResolvedValue(promoEmail);
+
+    await service.classifyEmail("n-promo");
+
+    expect(ai.getActiveProviderType).not.toHaveBeenCalled();
+    expect(ai.judgeWith).not.toHaveBeenCalled();
+    expect(ai.complete).not.toHaveBeenCalled();
+    const { create, update } = db.emailClassification.upsert.mock.calls[0][0];
+    expect(create).toEqual({
+      normalizedEmailId: "n-promo",
+      category: "marketing",
+      importance: "low",
+      urgency: "none",
+      recommendedAction: "unsubscribe",
+      confidence: "high",
+      needsReview: false,
+      reason: 'Sender rule rule-promo: glob "news.*.com"',
+      rawResponse: JSON.stringify({
+        ruleId: "rule-promo",
+        matchType: "glob",
+        pattern: "news.*.com",
+        matchedOn: "domain",
+      }),
+      classificationError: null,
+      providerUsed: "sender-rule",
+      senderRuleId: "rule-promo",
+    });
+    expect(update).toMatchObject({
+      providerUsed: "sender-rule",
+      senderRuleId: "rule-promo",
+    });
+    expect(
+      EmailClassificationOutputSchema.safeParse(create).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["delete", "delete"],
+    ["archive", "archive"],
+    ["marketing", "unsubscribe"],
+    ["newsletter", "mark_read"],
+    ["receipt", "mark_read"],
+  ])("maps rule category %s to recommendedAction %s", async (category, action) => {
+    const { service, db } = makeService("typesafe", [], [
+      { ...promoRule, category },
+    ]);
+    db.normalizedEmail.findUnique.mockResolvedValue(promoEmail);
+
+    await service.classifyEmail("n-promo");
+
+    const { create } = db.emailClassification.upsert.mock.calls[0][0];
+    expect(create).toMatchObject({ category, recommendedAction: action });
+  });
+
+  it("a non-matching email goes down the AI path unchanged (senderRuleId null)", async () => {
+    const { service, db, ai } = makeService("typesafe", [], [promoRule]);
+
+    await service.classifyEmail("n1");
+
+    expect(ai.getActiveProviderType).toHaveBeenCalledTimes(1);
+    expect(ai.judgeWith).toHaveBeenCalledTimes(1);
+    const { create } = db.emailClassification.upsert.mock.calls[0][0];
+    expect(create).toMatchObject({
+      providerUsed: "typesafe",
+      senderRuleId: null,
+    });
+  });
+
+  it("uses a matcher passed by the caller instead of loading one", async () => {
+    const { service, db, senderRules } = makeService("typesafe", [], []);
+    db.normalizedEmail.findUnique.mockResolvedValue(promoEmail);
+
+    await service.classifyEmail("n-promo", compileRules([promoRule]));
+
+    expect(senderRules.getMatcher).not.toHaveBeenCalled();
+    const { create } = db.emailClassification.upsert.mock.calls[0][0];
+    expect(create.providerUsed).toBe("sender-rule");
+  });
+
+  it("classifies rule matches even when the breaker is open, and defers the rest", async () => {
+    const { service, db, ai, senderRules } = makeService(
+      "typesafe",
+      [],
+      [promoRule],
+    );
+    db.normalizedEmail.findMany.mockResolvedValue([
+      candidate(normalized),
+      candidate(promoEmail),
+    ]);
+    db.normalizedEmail.findUnique.mockImplementation(
+      ({ where }: { where: { id: string } }) =>
+        Promise.resolve(where.id === "n-promo" ? promoEmail : normalized),
+    );
+    ai.getBreakerStatus.mockReturnValue({
+      open: true,
+      nextAllowedAttempt: "2026-09-24T00:00:00Z",
+      reason: "quota",
+    });
+
+    const result = await service.processUnclassified();
+
+    expect(result).toEqual({
+      processed: 1,
+      errors: 0,
+      needsReview: 0,
+      skipped: 1,
+      ruleClassified: 1,
+    });
+    expect(senderRules.getMatcher).toHaveBeenCalledTimes(1);
+    expect(ai.getActiveProviderType).not.toHaveBeenCalled();
+    expect(ai.judgeWith).not.toHaveBeenCalled();
+    expect(db.emailClassification.upsert).toHaveBeenCalledTimes(1);
+    expect(
+      db.emailClassification.upsert.mock.calls[0][0].create.providerUsed,
+    ).toBe("sender-rule");
+  });
+
+  it("runs the rule pass first, then the AI loop over non-matches only", async () => {
+    const { service, db, ai } = makeService("typesafe", [], [promoRule]);
+    db.normalizedEmail.findMany.mockResolvedValue([
+      candidate(normalized),
+      candidate(promoEmail),
+    ]);
+    db.normalizedEmail.findUnique.mockImplementation(
+      ({ where }: { where: { id: string } }) =>
+        Promise.resolve(where.id === "n-promo" ? promoEmail : normalized),
+    );
+
+    const result = await service.processUnclassified();
+
+    expect(result).toEqual({
+      processed: 2,
+      errors: 0,
+      needsReview: 0,
+      skipped: 0,
+      ruleClassified: 1,
+    });
+    expect(ai.judgeWith).toHaveBeenCalledTimes(1);
+    const ids = db.emailClassification.upsert.mock.calls.map(
+      (c: [{ where: { normalizedEmailId: string } }]) =>
+        c[0].where.normalizedEmailId,
+    );
+    // Rule pass before the AI loop, even though n1 is first in the batch.
+    expect(ids).toEqual(["n-promo", "n1"]);
+  });
+
+  it("a failed rule write counts under errors and the rest of the batch continues", async () => {
+    const { service, db, ai } = makeService("typesafe", [], [promoRule]);
+    db.normalizedEmail.findMany.mockResolvedValue([
+      candidate(promoEmail),
+      candidate(normalized),
+    ]);
+    db.emailClassification.upsert.mockRejectedValueOnce(
+      new Error("connection reset"),
+    );
+
+    const result = await service.processUnclassified();
+
+    expect(result).toEqual({
+      processed: 1,
+      errors: 1,
+      needsReview: 0,
+      skipped: 0,
+      ruleClassified: 0,
+    });
+    // The failed rule email is not retried through the AI loop this run.
+    expect(ai.judgeWith).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rule with an invalid stored category falls through to AI", async () => {
+    const { service, db, ai } = makeService("typesafe", [], [
+      { ...promoRule, category: "not-a-category" },
+    ]);
+    db.normalizedEmail.findMany.mockResolvedValue([candidate(promoEmail)]);
+    db.normalizedEmail.findUnique.mockResolvedValue(promoEmail);
+
+    const result = await service.processUnclassified();
+
+    expect(result).toEqual({
+      processed: 1,
+      errors: 0,
+      needsReview: 0,
+      skipped: 0,
+      ruleClassified: 0,
+    });
+    expect(ai.judgeWith).toHaveBeenCalledTimes(1);
+    const { create } = db.emailClassification.upsert.mock.calls[0][0];
+    expect(create).toMatchObject({ providerUsed: "typesafe", senderRuleId: null });
+  });
+
+  it("selects the sender fields the rule pass needs", async () => {
+    const { service, db } = makeService("typesafe");
+
+    await service.processUnclassified();
+
+    expect(db.normalizedEmail.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          senderDomain: true,
+          parsedEmail: { select: { fromAddress: true } },
+        },
+      }),
+    );
+  });
+});
+
+describe("ClassificationService — getStats", () => {
+  it("counts sender-rule rows under ruleClassified, not aiClassified", async () => {
+    const { service, db } = makeService("typesafe");
+    (db.emailClassification as Record<string, jest.Mock>).findMany = jest
+      .fn()
+      .mockResolvedValue([
+        { providerUsed: "typesafe", category: "receipt", needsReview: false },
+        { providerUsed: "openai", category: "personal", needsReview: true },
+        { providerUsed: "sender-rule", category: "marketing", needsReview: false },
+        { providerUsed: "sender-rule", category: "delete", needsReview: false },
+        { providerUsed: "fallback", category: "unknown", needsReview: true },
+        { providerUsed: null, category: "unknown", needsReview: false },
+      ]);
+
+    const stats = await service.getStats();
+
+    expect(stats).toMatchObject({
+      total: 6,
+      aiClassified: 2,
+      ruleClassified: 2,
+      fallbackClassified: 1,
+      needsReview: 2,
+    });
+    expect(stats.byProvider["sender-rule"]).toBe(2);
   });
 });

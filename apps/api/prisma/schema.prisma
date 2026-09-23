@@ -116,15 +116,56 @@ model EmailClassification {
   rawResponse         String?
   classificationError String?
   providerUsed        String?
+  senderRuleId        String?
   createdAt           DateTime @default(now())
 
   normalizedEmail NormalizedEmail @relation(fields: [normalizedEmailId], references: [id], onDelete: Cascade)
   reviewDecision  ReviewDecision?
+  // Set when a sender rule classified the email (providerUsed "sender-rule").
+  // SetNull keeps the classification row if the rule is deleted.
+  senderRule      SenderRule?     @relation(fields: [senderRuleId], references: [id], onDelete: SetNull)
 
   @@index([category])
   @@index([needsReview])
   @@index([confidence])
   @@index([createdAt])
+  @@index([senderRuleId])
+  @@index([providerUsed])
+}
+
+enum SenderRuleMatchType {
+  address
+  domain
+  domain_suffix
+  glob
+  regex
+}
+
+enum SenderRuleAction {
+  classify
+  trash
+}
+
+/// User-defined sender rule. Matched in the classify step before any AI
+/// call; a match writes the classification directly.
+model SenderRule {
+  id        String              @id @default(cuid())
+  /// Lowercased for every matchType except regex (matched with flag i).
+  pattern   String
+  matchType SenderRuleMatchType
+  action    SenderRuleAction    @default(classify)
+  category  String
+  enabled   Boolean             @default(true)
+  note      String?
+  /// manual | suggestion | tui
+  source    String              @default("manual")
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  classifications EmailClassification[]
+
+  @@unique([matchType, pattern])
+  @@index([enabled])
 }
 
 model ReviewDecision {

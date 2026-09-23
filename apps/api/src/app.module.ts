@@ -11,6 +11,7 @@ import { EmailParserModule } from "./modules/email-parser/email-parser.module";
 import { NormalizationModule } from "./modules/normalization/normalization.module";
 import { RulesEngineModule } from "./modules/rules-engine/rules-engine.module";
 import { ReviewQueueModule } from "./modules/review-queue/review-queue.module";
+import { SenderRulesModule } from "./modules/sender-rules/sender-rules.module";
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ReviewQueueModule } from "./modules/review-queue/review-queue.module";
     EmailParserModule,
     NormalizationModule,
     RulesEngineModule,
+    SenderRulesModule,
     ClassificationModule,
     AiProviderModule,
     ReviewQueueModule,

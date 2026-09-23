@@ -2,8 +2,10 @@
 
 This module provides LLM-based email classification using normalized email content and rule engine output.
 
-Two classification paths share one output schema. The path is chosen per
-email from the **active AI provider**:
+Enabled **sender rules** are checked first (see [Sender-rule
+pre-check](#sender-rule-pre-check)); a match is classified without any AI
+call. Otherwise two classification paths share one output schema. The path
+is chosen per email from the **active AI provider**:
 
 - **TypeSafe path** (active provider `typesafe`) — structured state + five
   typed questions, answers mapped deterministically. See
@@ -25,8 +27,8 @@ The classification pipeline uses an LLM to analyze emails and produce structured
 
 ```
 ClassificationService
-├── classifyEmail(id) → EmailClassification
-├── processUnclassified() → Batch process all unclassified emails
+├── classifyEmail(id) → EmailClassification (sender rules first, then AI)
+├── processUnclassified() → Rule pass, then breaker check + AI loop
 └── LLM Provider (mock implementation, replaceable)
 
 Prompt Builder
@@ -190,6 +192,45 @@ a later run:
   systemic 422 / invalid-shape problem does **not** appear in
   `GET /ai-providers/breaker` — watch for that log line and for `errors` in
   the `POST /classification/run` response.
+
+## Sender-rule pre-check
+
+`classifyEmail` checks the enabled `SenderRule` rows (managed at
+`/sender-rules`, see `modules/sender-rules/`) right after the "already
+classified" early return and **before** the active provider is looked up.
+A match writes the row directly:
+
+| Field               | Value                                                              |
+| ------------------- | ------------------------------------------------------------------ |
+| `category`          | the rule's category                                                |
+| `recommendedAction` | `delete`→`delete`, `archive`→`archive`, `marketing`→`unsubscribe`, else (including `newsletter`) `mark_read` |
+| `importance` / `urgency` / `confidence` | `low` / `none` / `high`                      |
+| `needsReview`       | `false`                                                            |
+| `reason`            | `Sender rule <id>: <matchType> "<pattern>"`                        |
+| `rawResponse`       | JSON `{ ruleId, matchType, pattern, matchedOn }`                   |
+| `providerUsed`      | `sender-rule`                                                      |
+| `senderRuleId`      | the rule id (set to null if the rule is later deleted)             |
+
+The output still goes through `EmailClassificationOutputSchema`; a rule
+whose stored category fails it is logged and the email falls through to
+the AI path (in a batch, it joins the AI loop). Precedence
+when several rules match: `address` > `domain` > `domain_suffix` > `glob` >
+`regex`, then the longer pattern, then the older rule, then id.
+
+Rules come from `SenderRulesService.getMatcher()`, which caches the
+compiled rules until the next write through `/sender-rules` (restart the
+API after editing `SenderRule` rows directly). `processUnclassified` loads
+the matcher once, so a running batch uses a snapshot of the rules.
+
+`processUnclassified` runs the rule pass over **every** candidate first,
+**before the breaker check**, so rule-matched mail is classified even while
+the breaker is open. Only the remaining emails go to the breaker check and
+the AI loop below. The result adds `ruleClassified` (a subset of
+`processed`). `GET /classification/stats` reports `ruleClassified`
+separately and excludes `sender-rule` rows from `aiClassified`.
+
+A `trash` rule classifies exactly like a `classify` rule here. Nothing in
+this step touches a mailbox; the move-to-Trash path ships separately.
 
 `processUnclassified` walks unclassified emails in a deterministic order
 (`rawEmail.internalDate` descending, then id), newest first. Emails that

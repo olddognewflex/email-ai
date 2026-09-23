@@ -7,7 +7,10 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
-import { ClassificationService } from "./classification.service";
+import {
+  ClassificationService,
+  ProcessUnclassifiedResult,
+} from "./classification.service";
 
 @Controller("classification")
 export class ClassificationController {
@@ -19,11 +22,7 @@ export class ClassificationController {
   async processAll(
     @Query("since") since?: string,
     @Query("all") all?: string,
-  ): Promise<{
-    processed: number;
-    errors: number;
-    needsReview: number;
-  }> {
+  ): Promise<ProcessUnclassifiedResult> {
     // Default to today's mail only; backfill is opt-in via ?all=true
     // or an explicit ?since=YYYY-MM-DD cutoff.
     let cutoff: Date | undefined;

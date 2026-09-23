@@ -102,7 +102,16 @@ every already-normalized email in place. It does not invalidate downstream class
 ## Stage 4 — Classify
 
 [`classifyEmail()`](mex://method:e10462dcc893b10a8c881fe8d9d9e6ea) returns the existing
-row immediately if one exists, then branches on the **active provider type**:
+row immediately if one exists, then checks the enabled **sender rules**
+(`SenderRule`, managed at `/sender-rules`) against `parsedEmail.fromAddress` and
+`senderDomain`. A match writes the row directly with no AI call: the rule's category,
+`needsReview: false`, `confidence: high`, `providerUsed: "sender-rule"`, `senderRuleId`,
+and `rawResponse` = `{ ruleId, matchType, pattern, matchedOn }`. Precedence is `address` >
+`domain` > `domain_suffix` > `glob` > `regex`, then longer pattern, older rule, id. A rule
+whose stored category fails the output schema falls through to AI. The compiled rules are
+cached in `SenderRulesService` and refreshed only by writes through `/sender-rules` (restart
+after direct DB edits); a batch uses one snapshot. Only without a usable match does it
+branch on the **active provider type**:
 
 - **LLM path** (any provider but `typesafe`): builds a prompt from the normalized email *plus
   the rules-engine verdict as a hint*, and calls `AiProviderService.complete` with
@@ -137,8 +146,12 @@ The failure split is deliberate and load-bearing:
   `MAX_CONSECUTIVE_REJECTIONS` (3) such failures in a row, mixed. These do not open the breaker,
   so a systemic case shows up only in that error log and the run's `errors` count.
 
-[`processUnclassified()`](mex://method:82aa62e49f39025ac1dff75ffd88c693) checks the
-breaker **before the loop** and returns `{ processed: 0, skipped: n }` if it is open, and
+[`processUnclassified()`](mex://method:82aa62e49f39025ac1dff75ffd88c693) first runs the
+**sender-rule pass over every candidate** (rules compiled once per run), **before the
+breaker check**, so rule-matched mail is classified even while the breaker is open; the
+result's `ruleClassified` counts those (they are included in `processed`). Only the
+non-matching emails go on. It then checks the
+breaker **before the AI loop** and returns them all as `skipped` if it is open, and
 breaks out of the loop on a `BreakerOpenError` mid-batch rather than logging one failure per
 remaining email. A run that reports a large `skipped` is a breaker event (or, on TypeSafe, a run of
 per-email failures), not a bug. Emails are processed newest first (`rawEmail.internalDate` desc,
