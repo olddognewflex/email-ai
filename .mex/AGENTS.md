@@ -1,7 +1,7 @@
 ---
 name: agents
 description: Always-loaded project anchor. Read this first. Contains project identity, non-negotiables, commands, and pointer to ROUTER.md for full context.
-last_updated: 2026-08-10
+last_updated: 2026-09-23
 ---
 
 # email-ai
@@ -13,7 +13,11 @@ and LLM-classifies each email into a human review queue and a daily markdown dig
 
 ## Non-Negotiables
 
-- Never mutate a mailbox — no delete, move, flag, or reply. The system only reads and records.
+- Never permanently delete email (no `\Deleted`, no EXPUNGE, no `messageDelete`) and never reply.
+  The only permitted mailbox mutation is an IMAP MOVE to the server-advertised `\Trash` folder,
+  triggered by an explicit, user-created, enabled `trash` sender rule, gated by
+  `MAILBOX_WRITES_ENABLED=true`, audited in `MailboxAction` before and after, and reversible via
+  `POST /mailbox-actions/:id/undo`. All of it lives in `MailboxWriterService`.
 - Anything sync-shaped defaults to `dryRun` on; only the literal string `"false"` disables it.
 - Validate every LLM response with Zod before it reaches the database; never persist raw output.
 - Never log, return, or commit a secret — API keys, decrypted passwords, access tokens.

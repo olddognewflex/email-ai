@@ -190,3 +190,45 @@ describe('syncAccount — uidValidity capture', () => {
     expect(db.rawEmail.upsert).not.toHaveBeenCalled();
   });
 });
+
+describe('syncAccount — injected IMAP client factory', () => {
+  it('builds its client through the factory with the account and credentials', async () => {
+    const client = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      getMailboxLock: jest.fn().mockResolvedValue({ release: jest.fn() }),
+      mailbox: { exists: 0 },
+      logout: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn(),
+    };
+    const factory = jest.fn(() => client);
+    const account = {
+      id: 'acc1',
+      isActive: true,
+      needsReauth: false,
+      host: 'h',
+      port: 993,
+      secure: true,
+      username: 'u',
+    };
+    const db = {
+      emailAccount: { findUnique: jest.fn().mockResolvedValue(account) },
+      syncState: {
+        upsert: jest.fn().mockResolvedValue({ id: 'ss1', lastSyncedUid: 0 }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const creds = { kind: 'oauth', accessToken: 't' };
+    const service = new EmailSyncService(
+      db as unknown as DatabaseService,
+      {} as AppConfigService,
+      { getImapCredentials: jest.fn().mockResolvedValue(creds) } as unknown as EmailAccountsService,
+      factory as unknown as ConstructorParameters<typeof EmailSyncService>[3],
+    );
+
+    await service.syncAccount('acc1', { dryRun: false });
+
+    expect(factory).toHaveBeenCalledWith(account, creds);
+    expect(ImapFlowMock).not.toHaveBeenCalled();
+    expect(client.logout).toHaveBeenCalled();
+  });
+});

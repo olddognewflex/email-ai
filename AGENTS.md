@@ -104,12 +104,15 @@ Schema location: `apps/api/prisma/schema.prisma`
 
 ## Safety Constraints
 
-- Never auto-delete emails
+- Never permanently delete email (no \Deleted, no EXPUNGE, no messageDelete).
 - Never send replies unless explicitly requested
-- Never silently mutate mailbox state
+- The only permitted mailbox mutation is an IMAP MOVE to the server-advertised \Trash folder, triggered by an explicit, user-created, enabled `trash` sender rule, gated by MAILBOX_WRITES_ENABLED=true, audited in MailboxAction before and after, and reversible via POST /mailbox-actions/:id/undo.
 - Always default to dry-run mode for sync operations
 - Always validate LLM outputs with Zod before acting
-- All mailbox actions must be auditable
+- All mailbox actions must be auditable (an EmailAccount with MailboxAction history cannot be deleted)
+- The API binds to 127.0.0.1 only (override with EMAIL_AI_HOST; a non-loopback bind logs a WARN) and has no auth; never expose it
+- Requests whose Host header is not the API's own local address (`127.0.0.1:<PORT>`, `localhost:<PORT>`) are rejected with 403 (DNS-rebinding guard)
+- Every non-GET/HEAD/OPTIONS request requires the `X-Email-AI-Client` header (any non-empty value; global guard), which blocks cross-site browser requests. Internal clients (TUI, scripts/daily-digest.sh) send it; new clients must too
 
 ## Environment Requirements
 

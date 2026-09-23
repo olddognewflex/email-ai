@@ -6,10 +6,15 @@
 #   ingest    sync IMAP accounts, parse, normalize (no AI)
 #   classify  classify normalized emails (AI; skipped while the AI
 #             circuit breaker is open)
-#   sync      ingest + classify
+#   sync      ingest + classify + apply trash sender rules
 #   digest    write digest markdown into the qi vault and qi-capture
 #             actionable emails (yesterday's final + today-so-far)
 #   all       sync + digest (default)
+#
+# The apply step moves mail matched by enabled `trash` sender rules to
+# the server's Trash folder ONLY when the API reports the
+# MAILBOX_WRITES_ENABLED kill switch on; otherwise it is a dry run that
+# only logs what would move.
 #
 # Scheduled via launchd: the hourly job runs "sync" so classification
 # keeps up with incoming mail; the 07:30 job runs "digest". Safe to
@@ -37,8 +42,9 @@ esac
 REPO_DIR="${EMAIL_AI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # The always-on API runs under launchd on PORT 3100 (see
 # com.odnf.email-ai.api.plist); 3000 is the dev API. Override with
-# EMAIL_AI_API_URL to point a run at the dev server.
-API_URL="${EMAIL_AI_API_URL:-http://localhost:3100}"
+# EMAIL_AI_API_URL to point a run at the dev server. The API binds
+# 127.0.0.1 only.
+API_URL="${EMAIL_AI_API_URL:-http://127.0.0.1:3100}"
 VAULT_DIGEST_DIR="${EMAIL_AI_DIGEST_DIR:-$HOME/Documents/obsidian/Qi/20-notes/email-digests}"
 STATE_DIR="${EMAIL_AI_STATE_DIR:-$HOME/.local/state/email-ai}"
 CAPTURED_IDS_FILE="$STATE_DIR/captured-ids.txt"
@@ -48,6 +54,10 @@ mkdir -p "$STATE_DIR" "$VAULT_DIGEST_DIR"
 touch "$CAPTURED_IDS_FILE"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+# Every API call goes through here. Write-capable endpoints (live apply)
+# require the X-Email-AI-Client header; sending it everywhere is harmless.
+api() { curl -H "X-Email-AI-Client: daily-digest" "$@"; }
 
 FAILED=0
 
@@ -65,18 +75,18 @@ step() {
 # POST an endpoint and log its JSON response one line at a time.
 post_step() {
   local label="$1" url="$2"
-  curl -fsS -X POST "$url" | jq -c '.' \
+  api -fsS -X POST "$url" | jq -c '.' \
     | while read -r line; do log "  $label: $line"; done
 }
 
 # Prints the AI circuit breaker status JSON ({open, nextAllowedAttempt,
 # reason}); fails if the API can't be reached.
 breaker_status() {
-  curl -fsS --max-time 5 "$API_URL/ai-providers/breaker"
+  api -fsS --max-time 5 "$API_URL/ai-providers/breaker"
 }
 
 api_healthy() {
-  curl -fsS --max-time 5 "$API_URL/health" 2>/dev/null \
+  api -fsS --max-time 5 "$API_URL/health" 2>/dev/null \
     | jq -e '.status == "ok" and .db == "ok"' >/dev/null 2>&1
 }
 
@@ -107,7 +117,7 @@ ensure_stack() {
 
 run_ingest() {
   local accounts
-  if ! accounts=$(curl -fsS "$API_URL/email-accounts" | jq -r '.[].id'); then
+  if ! accounts=$(api -fsS "$API_URL/email-accounts" | jq -r '.[].id'); then
     log "ERROR: could not list email accounts; skipping IMAP sync"
     FAILED=1
   elif [ -z "$accounts" ]; then
@@ -152,10 +162,41 @@ run_classify() {
   step classify post_step classify "$API_URL/classification/run?since=$since"
 }
 
+# Apply enabled `trash` sender rules. Live only when the API reports the
+# mailbox-write kill switch on; otherwise a dry run that logs the
+# would-move totals. Never falls back from dry run to live.
+run_apply() {
+  local status enabled
+  if ! status=$(api -fsS --max-time 5 "$API_URL/mailbox-actions/status"); then
+    log "ERROR: could not read mailbox-write status; skipping apply"
+    return 1
+  fi
+  enabled=$(jq -r '.writesEnabled == true' <<<"$status") || return 1
+
+  local mode="true"
+  if [ "$enabled" = "true" ]; then
+    mode="false"
+    log "Applying trash sender rules (mailbox writes ENABLED: moving to Trash)"
+  else
+    log "Applying trash sender rules (dry run: mailbox writes disabled)"
+  fi
+
+  # Bounded so a hung API cannot stall the hourly job.
+  api -fsS --max-time 600 -X POST "$API_URL/sender-rules/apply?dryRun=$mode" \
+    | jq -c '{dryRun, writesEnabled, limit, totals}' \
+    | while read -r line; do
+        if [ "$mode" = "true" ]; then
+          log "  apply (would move): $line"
+        else
+          log "  apply: $line"
+        fi
+      done
+}
+
 write_digest() {
   local day="$1"
   log "Writing digest for $day to $VAULT_DIGEST_DIR"
-  curl -fsS -X POST "$API_URL/digest/generate" \
+  api -fsS -X POST "$API_URL/digest/generate" \
     -H 'Content-Type: application/json' \
     -d "{\"outputPath\": \"$VAULT_DIGEST_DIR\", \"date\": \"$day\"}" \
     | jq -c '.data.digest.summary' | while read -r line; do log "  digest: $line"; done
@@ -164,7 +205,7 @@ write_digest() {
 capture_actionables() {
   local day="$1"
   local digest rows captured=0 skipped=0
-  digest=$(curl -fsS "$API_URL/digest?date=$day") || return 1
+  digest=$(api -fsS "$API_URL/digest?date=$day") || return 1
 
   # One line per actionable email: id<TAB>capture text
   rows=$(jq -r '
@@ -213,9 +254,9 @@ ensure_stack
 case "$STAGE" in
   ingest)   run_ingest ;;
   classify) run_classify ;;
-  sync)     run_ingest; run_classify ;;
+  sync)     run_ingest; run_classify; step apply run_apply ;;
   digest)   run_digest_stage ;;
-  all)      run_ingest; run_classify; run_digest_stage ;;
+  all)      run_ingest; run_classify; step apply run_apply; run_digest_stage ;;
 esac
 
 if [ "$FAILED" -ne 0 ]; then

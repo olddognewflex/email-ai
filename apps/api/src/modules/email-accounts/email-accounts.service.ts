@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { EmailAccount } from '@prisma/client';
+import { EmailAccount, Prisma } from '@prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { AppConfigService } from '../config/config.service';
 import { encrypt, decrypt } from '../../common/crypto.util';
@@ -75,7 +75,7 @@ export class EmailAccountsService {
   async remove(id: string): Promise<void> {
     const account = await this.db.emailAccount.findUnique({
       where: { id },
-      include: { _count: { select: { rawEmails: true } } },
+      include: { _count: { select: { rawEmails: true, mailboxActions: true } } },
     });
     if (!account) throw new NotFoundException(`EmailAccount ${id} not found`);
     if (account._count.rawEmails > 0) {
@@ -83,7 +83,27 @@ export class EmailAccountsService {
         `Cannot delete account with ${account._count.rawEmails} synced emails`,
       );
     }
-    await this.db.emailAccount.delete({ where: { id } });
+    // Keep the mailbox-write audit trail: MailboxAction.accountId
+    // is ON DELETE RESTRICT, so an account with write history stays.
+    if (account._count.mailboxActions > 0) {
+      throw new ConflictException(
+        `Cannot delete account with ${account._count.mailboxActions} mailbox actions (audit trail)`,
+      );
+    }
+    try {
+      await this.db.emailAccount.delete({ where: { id } });
+    } catch (error) {
+      // Rows added between the check and the delete trip the FK.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2003'
+      ) {
+        throw new ConflictException(
+          `Cannot delete account ${id}: it has dependent records (mailbox actions)`,
+        );
+      }
+      throw error;
+    }
   }
 
   async getDecryptedPassword(id: string): Promise<string> {

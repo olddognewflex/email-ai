@@ -5,7 +5,16 @@
 
 const PORT = process.env.PORT ?? "3000";
 
-export const API_BASE = `http://localhost:${PORT}`;
+// 127.0.0.1, not "localhost": the API binds IPv4 loopback only, and
+// "localhost" may resolve to ::1 first.
+export const API_BASE = `http://127.0.0.1:${PORT}`;
+
+/**
+ * Sent on every request. The API requires it on write-capable endpoints
+ * (trash rules, apply, undo); a browser cannot add it cross-site without a
+ * CORS preflight the API never grants.
+ */
+export const CLIENT_HEADER = { "X-Email-AI-Client": "eai-tui" } as const;
 
 export const UNREACHABLE_MESSAGE = `API not running on ${API_BASE} — check launchd service`;
 
@@ -166,7 +175,9 @@ function zodErrorMessage(body: unknown): string | null {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, init);
+    const headers = new Headers(init?.headers);
+    for (const [k, v] of Object.entries(CLIENT_HEADER)) headers.set(k, v);
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   } catch {
     throw new ApiError(UNREACHABLE_MESSAGE, 0);
   }

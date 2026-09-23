@@ -8,6 +8,12 @@ export const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
+  // Mailbox-write kill switch. Fail-closed: only the exact string "true"
+  // enables writes. Never z.coerce.boolean(), which turns "false" into true.
+  MAILBOX_WRITES_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 export type Env = z.infer<typeof envSchema>;

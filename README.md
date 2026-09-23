@@ -62,6 +62,8 @@ pnpm --filter @email-ai/api test:cov
 
 ## API — Phase 1 endpoints
 
+Every non-GET request needs an `X-Email-AI-Client` header (any value), and the `Host` header must be the API's own local address. See *Network exposure* under [Moving mail to Trash](#moving-mail-to-trash-trash-rules).
+
 | Method | Path                            | Description                                    |
 | ------ | ------------------------------- | ---------------------------------------------- |
 | GET    | /health                         | Health + DB check                              |
@@ -101,6 +103,14 @@ pnpm --filter @email-ai/api test:cov
 | POST   | /sender-rules/preview           | Count stored mail a pattern would match (DB only) |
 | GET    | /sender-rules/suggestions       | Suggest rules for look-alike promo families (read-only) |
 |        |                                 | `?minEmails=20&minShare=0.9&provider=typesafe` |
+| POST   | /sender-rules/apply             | Apply enabled `trash` rules to INBOX. **Dry run unless `dryRun=false`** |
+|        |                                 | `?dryRun=true&ruleId=&accountId=&limit=200`; `dryRun=false` needs the kill switch (else 403) |
+| GET    | /mailbox-actions                | Mailbox-write audit log, newest first (`?limit=50&accountId=&status=`) |
+| GET    | /mailbox-actions/status         | `{ writesEnabled }` — kill-switch state (no IMAP)  |
+| POST   | /mailbox-actions/:id/undo       | Move a trashed message back to INBOX → `{ original, restore }` |
+|        |                                 | 403 writes disabled · 404 unknown · 409 not a succeeded move / already undone · 502 not found in Trash |
+| POST   | /mailbox-actions/reconcile      | Resolve `pending`/`unknown` actions: exact-UID check, then Message-ID (read-only on IMAP) |
+|        |                                 | `?accountId=`; kill switch required                |
 | GET    | /digest                         | Get daily digest as JSON                       |
 | POST   | /digest/generate                | Generate and save digest to file system        |
 
@@ -401,10 +411,116 @@ after y/n). `G` shows suggestions. `c` opens a confirm panel for the
 selected family. The panel lists every rule to be created and, for each
 glob, the preview count and protected hits. `y` then creates the rules.
 
-`action: "trash"` rules (category defaults to `delete`) currently only
-classify. Moving mail to Trash, the `MAILBOX_WRITES_ENABLED` kill switch,
-the audit log and undo come in a later change; **no mailbox is modified by
-sender rules today**.
+#### Moving mail to Trash (`trash` rules)
+
+**Network exposure.** The API has no authentication. Three layers keep it
+local:
+
+- **Bind address.** It listens on **127.0.0.1 only**. Set `EMAIL_AI_HOST`
+  to change it; a non-loopback value logs a warning at startup.
+- **Host header check (DNS rebinding).** Every request whose `Host`
+  header is not exactly `127.0.0.1:<PORT>` or `localhost:<PORT>` gets a
+  403. `[::1]:<PORT>` is also accepted when bound to `::1`, and
+  `<EMAIL_AI_HOST>:<PORT>` when that is a non-loopback address. A page
+  on another site that re-points its own hostname at 127.0.0.1 therefore
+  gets a 403 for GETs and POSTs alike.
+- **`X-Email-AI-Client` header (cross-site requests).** Every request
+  except GET/HEAD/OPTIONS must carry this header with any non-empty value,
+  or it gets a 403. A browser cannot add a custom header to a cross-site
+  request without a CORS preflight, and the API enables no CORS. So a
+  page on another origin cannot send the API state-changing requests:
+  moves, undo, reconcile, rule edits, sync, review decisions made by
+  POST, and so on.
+
+The `eai` TUI and `scripts/daily-digest.sh` send the header on every
+request. With curl, add `-H 'X-Email-AI-Client: me'`, including for
+`POST /email-accounts/...` and `POST /email-sync/...`.
+
+What this does **not** protect:
+- **Local processes.** Any program running as you on this machine can
+  call the API, header included.
+- **GET routes that change state.** The HTML review UI's approve/reject
+  links (`GET /review/:id/approve`, `GET /review/:id/reject`) are not
+  header-checked. That is a known residual. They record review decisions
+  only, never touch a mailbox, and a rejection only *prevents* trashing.
+  A cross-site page can still trigger them blind (for example as an
+  image URL), because only the Host check applies to them.
+
+`action: "trash"` rules (category defaults to `delete`) classify like any
+other rule. They can also move matching INBOX mail to the account's Trash
+folder. This is the **only** way the system changes a mailbox, and it is
+off by default:
+
+- **Kill switch.** Moves and undo happen only when the API was started
+  with `MAILBOX_WRITES_ENABLED=true`, the exact lowercase string. Any other
+  value, or unset, keeps the system read-only. The value is read at startup,
+  so restart the API after changing it:
+  `launchctl kickstart -k gui/$(id -u)/com.odnf.email-ai.api`.
+  Check the live state with `GET /mailbox-actions/status`.
+- **Dry run first.** `POST /sender-rules/apply` is a dry run unless you pass
+  `dryRun=false`. A dry run reads the database only (no IMAP connection)
+  and writes no audit rows. It reports, per rule and account, how much
+  INBOX mail matches, how much this run would move (`selected`, capped by
+  `limit`, default 200, max 1000, across the whole run), and up to 10
+  samples. `dryRun=false` while the kill switch is off returns 403. It is
+  never silently turned into a dry run.
+- **Scope.** The whole INBOX backlog whose sender's *winning* rule is an
+  enabled `trash` rule. Precedence is the same as classification, so an
+  `address` classify rule for `friend@promo.example` protects that sender
+  from a `domain` trash rule for `promo.example`. Mail is left alone when:
+  - you rejected or recategorized its classification in review;
+  - it already has a pending, succeeded, skipped or unknown move;
+  - it was **ever trashed before**, matched by Message-ID. That covers
+    mail restored with undo, and mail you dragged back to the inbox in your
+    mail client, which comes back under a new UID. The system never re-trashes
+    what you rescued.
+- **What a move is.** An IMAP `UID MOVE` into the folder the server
+  advertises as `\Trash` (SPECIAL-USE), so Gmail's `[Gmail]/Trash` is
+  found by flag, not by name. A server without the `MOVE` extension, or
+  without an advertised `\Trash`, is refused. The code never flags
+  `\Deleted`, never expunges, and never deletes permanently. Before moving,
+  each message's identity is re-checked on the server (UIDVALIDITY and
+  Message-ID). Anything that cannot be confirmed is skipped, not moved.
+- **Audit.** Every attempt is recorded in `MailboxAction`: a `pending` row
+  is written before the MOVE and updated to `succeeded` / `failed` after it.
+  Skipped messages get a `skipped` row with the reason. List them with
+  `GET /mailbox-actions`.
+  - **One active move per message** is enforced by the database: partial
+    unique indexes on (account, UIDVALIDITY, UID) and on the RawEmail. Two
+    API processes (dev :3000 and launchd :3100 share the database) can
+    never both move the same message; the loser records `already_in_progress`.
+  - If the server's reply to a MOVE is lost and the follow-up check cannot
+    tell whether the message moved, the row is marked `unknown`. Such rows
+    are never retried. `POST /mailbox-actions/reconcile` resolves them, and
+    any row stuck `pending`, by looking each message up by Message-ID in
+    INBOX and Trash. It only reads the mailbox; it never moves anything.
+    Rows younger than 10 minutes are left alone, since they may still be in
+    flight. Found in Trash → `succeeded`, which makes the move undoable.
+    Still in INBOX → `failed`. Stuck undos are resolved the same way.
+  - The audit trail is kept: an email account that has mailbox actions
+    cannot be deleted (409).
+- **Undo.** `POST /mailbox-actions/:id/undo` moves the message from Trash
+  back to **INBOX** (the kill switch must be on). Gmail labels are recorded
+  on the audit row but **not re-applied** on undo. An undone message is
+  never moved again by the rules.
+- **Trash is purged by the server.** Gmail empties Trash after 30 days;
+  other providers may purge it sooner, or on a schedule you set. After
+  that, undo returns 502 (not found in Trash) and the message is gone.
+
+The hourly `scripts/daily-digest.sh sync` job runs the apply step after
+classification. It moves mail only when `/mailbox-actions/status` reports
+`writesEnabled: true`; otherwise it runs a dry run and logs the would-move
+totals.
+
+```bash
+# What would move (safe; the default). Every POST needs the header.
+curl -X POST -H 'X-Email-AI-Client: me' 'http://127.0.0.1:3000/sender-rules/apply'
+# Recent mailbox actions, and undo one
+curl 'http://127.0.0.1:3000/mailbox-actions?limit=20'
+curl -X POST -H 'X-Email-AI-Client: me' http://127.0.0.1:3000/mailbox-actions/<id>/undo
+# Resolve pending/unknown actions (read-only on IMAP)
+curl -X POST -H 'X-Email-AI-Client: me' 'http://127.0.0.1:3000/mailbox-actions/reconcile'
+```
 
 ### Classification Statistics
 
