@@ -93,6 +93,12 @@ pnpm --filter @email-ai/api test:cov
 |        |                                 | same `days` / `since` / `all` params           |
 | POST   | /review-queue/:id/approve       | Approve a classification                       |
 | POST   | /review-queue/:id/reject        | Reject a classification                        |
+| GET    | /sender-rules                   | List sender rules                              |
+| GET    | /sender-rules/:id               | Get one sender rule (404 if missing)           |
+| POST   | /sender-rules                   | Create a rule → `{ rule, warnings }` (409 dup) |
+| PATCH  | /sender-rules/:id               | Update a rule (re-validated) → `{ rule, warnings }` |
+| DELETE | /sender-rules/:id               | Delete a rule (204)                            |
+| POST   | /sender-rules/preview           | Count stored mail a pattern would match (DB only) |
 | GET    | /digest                         | Get daily digest as JSON                       |
 | POST   | /digest/generate                | Generate and save digest to file system        |
 
@@ -283,9 +289,67 @@ The AI provider service includes automatic rate limiting and exponential backoff
 
 See the [AI Provider README](apps/api/src/modules/ai-provider/README.md) for details on configuring rate limits for your specific provider.
 
+### Sender rules
+
+Sender rules classify mail from known bulk senders **before any AI call**
+(no cost, not affected by the circuit breaker). Each rule has a `pattern`, a
+`matchType`, an `action` (`classify` or `trash`), a `category`, and an
+`enabled` flag:
+
+| `matchType`     | Matches                                                            |
+| --------------- | ------------------------------------------------------------------ |
+| `address`       | exact from-address, case-insensitive                               |
+| `domain`        | exact sender domain                                                |
+| `domain_suffix` | the domain and its subdomains (`kick.com` does not match `songkick.com`) |
+| `glob`          | anchored. Without `@` it matches the domain and `*`/`?` stay within one label (`news.*.com` matches `news.foo.com`, not `news.a.b.com`). With `@` it matches the full address: before `@`, `*`/`?` also match dots (`*@kickstargo.com` matches `first.last@kickstargo.com`); after `@` they stay within one label |
+| `regex`         | case-insensitive and **unanchored**: `backer` matches anywhere in the domain, so write `^backer[a-z]+\.com$` for a whole domain. ≤200 chars, must compile, no nested, optional or ambiguous repetition (`(a+)+`, `(a\|b)*`, `(x+)?`), at most 3 unbounded quantifiers (`*`, `+`, `{n,}`). Case is folded outside `[...]`; character classes are stored as written. An `@` in the pattern targets the full address |
+
+When several rules match, `address` > `domain` > `domain_suffix` > `glob` >
+`regex` wins, then the longer pattern, then the older rule. Matched mail is
+stored with `providerUsed: "sender-rule"` and `needsReview: false`. Rules
+only classify mail that has no classification yet; they never reclassify.
+
+Patterns are stored lowercased (for a regex, escapes such as `\S` are kept
+as written), so rules that differ only in case are duplicates (409).
+
+```bash
+# Preview what a pattern would catch in stored mail (read-only)
+curl -X POST localhost:3000/sender-rules/preview \
+  -H 'content-type: application/json' \
+  -d '{"pattern":"news.*.com","matchType":"glob"}'
+
+curl -X POST localhost:3000/sender-rules \
+  -H 'content-type: application/json' \
+  -d '{"pattern":"news.*.com","matchType":"glob","category":"marketing"}'
+```
+
+Invalid or too-broad patterns return 400: a regex that does not compile or
+could backtrack catastrophically, a glob or regex that matches ordinary
+senders such as `gmail.com` or `noreply@outlook.com` (`.*`, `com`, `*.com`,
+`*@*.com`, local-part-only rules like `^noreply@`), a glob whose domain is only a public suffix (`*.co.uk`), or a
+`domain_suffix` that is a public suffix (`com`, `co.uk`, `com.au`). A single
+provider belongs in an `address`, `domain` or `domain_suffix` rule. A rule
+that would also match a known legitimate
+look-alike (`kickstarter.com`, `*.backerkit.com`, `pledgebox.com`,
+`songkick.com`) is saved, and the response lists a warning.
+
+Preview returns `matchedEmails` (all stored mail the pattern matches),
+`unclassifiedMatches` (the part a new rule would actually classify), the
+top 25 domains, and any protected hits.
+
+The API caches the compiled rules and refreshes the cache only when a rule
+is written through `/sender-rules`. After editing `SenderRule` rows
+directly in the database, restart the API. A classification run uses the
+rules as they were when it started.
+
+`action: "trash"` rules (category defaults to `delete`) currently only
+classify. Moving mail to Trash, the `MAILBOX_WRITES_ENABLED` kill switch,
+the audit log and undo come in a later change; **no mailbox is modified by
+sender rules today**.
+
 ### Classification Statistics
 
-Track how many emails have been classified and which path was used (AI provider vs fallback; TypeSafe rows show as `typesafe`):
+Track how many emails have been classified and which path was used (AI provider vs fallback; TypeSafe rows show as `typesafe`, sender-rule rows as `sender-rule` and count under `ruleClassified`, not `aiClassified`):
 
 ```bash
 curl http://localhost:3000/classification/stats
@@ -301,6 +365,7 @@ Response:
     "fallback": 30
   },
   "aiClassified": 120,
+  "ruleClassified": 0,
   "fallbackClassified": 30,
   "needsReview": 15,
   "byCategory": {

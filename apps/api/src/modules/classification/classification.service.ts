@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { ZodError } from "zod";
 import { EmailClassification, NormalizedEmail } from "@prisma/client";
 import { DatabaseService } from "../database/database.service";
 import {
@@ -6,6 +7,7 @@ import {
   EmailClassificationOutput,
   EmailClassificationOutputSchema,
   LlmRequest,
+  RecommendedAction,
 } from "@email-ai/shared";
 import { buildClassificationPrompt } from "./classification.prompt";
 import {
@@ -21,6 +23,12 @@ import {
   BreakerOpenError,
   isPerRequestFailure,
 } from "../ai-provider/ai-provider.error";
+import { SenderRulesService } from "../sender-rules/sender-rules.service";
+import type {
+  MatchableSenderRule,
+  SenderRuleMatch,
+  SenderRuleMatcher,
+} from "../sender-rules/sender-rule-matcher";
 
 /**
  * Stop a batch after this many consecutive per-email failures (TypeSafe 422
@@ -30,11 +38,45 @@ import {
  */
 export const MAX_CONSECUTIVE_REJECTIONS = 3;
 
+/** `providerUsed` for rows written by a sender rule instead of an AI call. */
+export const SENDER_RULE_PROVIDER = "sender-rule";
+
+/**
+ * Recommended action for a sender-rule classification, by rule category.
+ * `newsletter` is a wanted subscription (mark_read); only `marketing`
+ * suggests unsubscribing.
+ */
+export function senderRuleRecommendedAction(
+  category: string,
+): RecommendedAction {
+  switch (category) {
+    case "delete":
+      return "delete";
+    case "archive":
+      return "archive";
+    case "marketing":
+      return "unsubscribe";
+    default:
+      return "mark_read";
+  }
+}
+
+export interface ProcessUnclassifiedResult {
+  /** Rows written this run: sender-rule and AI classifications together. */
+  processed: number;
+  errors: number;
+  needsReview: number;
+  skipped: number;
+  /** Of `processed`, how many a sender rule classified (no AI call). */
+  ruleClassified: number;
+}
+
 interface ClassificationAttempt {
   output: EmailClassificationOutput;
   rawResponse: string | null;
   classificationError: string | null;
   providerUsed: string | null;
+  senderRuleId?: string | null;
 }
 
 @Injectable()
@@ -44,9 +86,19 @@ export class ClassificationService {
   constructor(
     private readonly db: DatabaseService,
     private readonly aiProviderService: AiProviderService,
+    private readonly senderRulesService: SenderRulesService,
   ) {}
 
-  async classifyEmail(normalizedEmailId: string): Promise<EmailClassification> {
+  /**
+   * Classify one normalized email. Enabled sender rules are checked first:
+   * a match writes the classification directly, with no AI call. `matcher`
+   * lets a batch compile the rules once; otherwise the service's cached
+   * matcher is used.
+   */
+  async classifyEmail(
+    normalizedEmailId: string,
+    matcher?: SenderRuleMatcher<MatchableSenderRule>,
+  ): Promise<EmailClassification> {
     const normalized = await this.db.normalizedEmail.findUnique({
       where: { id: normalizedEmailId },
       include: { parsedEmail: true, classification: true },
@@ -63,45 +115,120 @@ export class ClassificationService {
       return normalized.classification;
     }
 
+    // Sender rules run before the provider is even looked up: a match
+    // costs no AI call and does not depend on the breaker.
+    const rules = matcher ?? (await this.senderRulesService.getMatcher());
+    const ruleMatch = rules.match({
+      fromAddress: normalized.parsedEmail.fromAddress,
+      senderDomain: normalized.senderDomain,
+    });
+    if (ruleMatch) {
+      const attempt = this.tryRuleAttempt(normalizedEmailId, ruleMatch);
+      // An unusable rule (bad stored category) falls through to AI.
+      if (attempt) return this.persist(normalizedEmailId, attempt);
+    }
+
     const input = this.buildInput(normalized);
     const providerType = await this.aiProviderService.getActiveProviderType();
 
     // A provider/breaker failure means we never got an answer. Both paths
     // let it propagate and leave the email unclassified for a later run,
     // rather than poisoning it with a fallback classification.
-    const { output, rawResponse, classificationError, providerUsed } =
+    const attempt =
       providerType === "typesafe"
         ? await this.classifyWithTypeSafe(input)
         : await this.classifyWithLlm(normalizedEmailId, input, providerType);
 
+    return this.persist(normalizedEmailId, attempt);
+  }
+
+  private persist(
+    normalizedEmailId: string,
+    {
+      output,
+      rawResponse,
+      classificationError,
+      providerUsed,
+      senderRuleId = null,
+    }: ClassificationAttempt,
+  ): Promise<EmailClassification> {
+    const data = {
+      category: output.category,
+      importance: output.importance,
+      urgency: output.urgency,
+      recommendedAction: output.recommendedAction,
+      confidence: output.confidence,
+      needsReview: output.needsReview,
+      reason: output.reason,
+      rawResponse,
+      classificationError,
+      providerUsed,
+      senderRuleId,
+    };
     return this.db.emailClassification.upsert({
       where: { normalizedEmailId },
-      create: {
-        normalizedEmailId,
-        category: output.category,
-        importance: output.importance,
-        urgency: output.urgency,
-        recommendedAction: output.recommendedAction,
-        confidence: output.confidence,
-        needsReview: output.needsReview,
-        reason: output.reason,
-        rawResponse,
-        classificationError,
-        providerUsed,
-      },
-      update: {
-        category: output.category,
-        importance: output.importance,
-        urgency: output.urgency,
-        recommendedAction: output.recommendedAction,
-        confidence: output.confidence,
-        needsReview: output.needsReview,
-        reason: output.reason,
-        rawResponse,
-        classificationError,
-        providerUsed,
-      },
+      create: { normalizedEmailId, ...data },
+      update: data,
     });
+  }
+
+  /**
+   * `classifyWithRule`, or null (logged) when the rule's output fails
+   * EmailClassificationOutputSchema, e.g. a stored category outside the
+   * enum. Other errors propagate.
+   */
+  private tryRuleAttempt(
+    normalizedEmailId: string,
+    match: SenderRuleMatch<MatchableSenderRule>,
+  ): ClassificationAttempt | null {
+    try {
+      return this.classifyWithRule(match);
+    } catch (error) {
+      if (!(error instanceof ZodError)) throw error;
+      this.logger.warn(
+        `Sender rule ${match.rule.id} produced an invalid classification for ` +
+          `normalized email ${normalizedEmailId} (${error.issues
+            .map((i) => `${i.path.join(".")}: ${i.message}`)
+            .join(", ")}); falling through to AI`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Sender-rule path: deterministic output from the matched rule. Still
+   * validated with EmailClassificationOutputSchema, so a stored rule with
+   * a category outside the enum fails loudly instead of writing a bad row.
+   */
+  private classifyWithRule({
+    rule,
+    matchedOn,
+  }: SenderRuleMatch<MatchableSenderRule>): ClassificationAttempt {
+    const output = EmailClassificationOutputSchema.parse({
+      category: rule.category,
+      importance: "low",
+      urgency: "none",
+      recommendedAction: senderRuleRecommendedAction(rule.category),
+      confidence: "high",
+      needsReview: false,
+      reason:
+        `Sender rule ${rule.id}: ${rule.matchType} "${rule.pattern}"`.slice(
+          0,
+          500,
+        ),
+    });
+    return {
+      output,
+      rawResponse: JSON.stringify({
+        ruleId: rule.id,
+        matchType: rule.matchType,
+        pattern: rule.pattern,
+        matchedOn,
+      }),
+      classificationError: null,
+      providerUsed: SENDER_RULE_PROVIDER,
+      senderRuleId: rule.id,
+    };
   }
 
   /**
@@ -188,20 +315,21 @@ export class ClassificationService {
     return { output, rawResponse, classificationError, providerUsed };
   }
 
-  async processUnclassified(since?: Date): Promise<{
-    processed: number;
-    errors: number;
-    needsReview: number;
-    skipped: number;
-  }> {
-    const unclassified = await this.db.normalizedEmail.findMany({
+  async processUnclassified(
+    since?: Date,
+  ): Promise<ProcessUnclassifiedResult> {
+    const candidates = await this.db.normalizedEmail.findMany({
       where: {
         classification: null,
         ...(since && {
           parsedEmail: { rawEmail: { internalDate: { gte: since } } },
         }),
       },
-      select: { id: true },
+      select: {
+        id: true,
+        senderDomain: true,
+        parsedEmail: { select: { fromAddress: true } },
+      },
       // Newest mail first. Per-email failures write no row, so they stay
       // unclassified; oldest-first would put them at the head of every
       // batch and the consecutive-rejection stop would starve new mail.
@@ -211,8 +339,51 @@ export class ClassificationService {
       ],
     });
 
-    // Circuit breaker: if a prior run hit a quota/auth wall, skip the whole
-    // batch cheaply instead of firing one doomed request per email.
+    // Sender-rule pass first, over every candidate: it needs no AI call,
+    // so it runs even when the breaker is open. Load the rules once: the
+    // whole run uses this snapshot, even if rules change mid-run.
+    const matcher = await this.senderRulesService.getMatcher();
+    let ruleClassified = 0;
+    let ruleErrors = 0;
+    const unclassified: { id: string }[] = [];
+
+    for (const candidate of candidates) {
+      const match =
+        matcher.size > 0
+          ? matcher.match({
+              fromAddress: candidate.parsedEmail?.fromAddress ?? null,
+              senderDomain: candidate.senderDomain,
+            })
+          : null;
+      // No match, or a rule whose output is invalid (bad stored category):
+      // leave it to the AI loop, which falls through the same way.
+      const attempt = match ? this.tryRuleAttempt(candidate.id, match) : null;
+      if (!match || !attempt) {
+        unclassified.push({ id: candidate.id });
+        continue;
+      }
+      try {
+        // Candidates come from the classification: null query, so there
+        // is no existing row to return; persist is an upsert regardless.
+        await this.persist(candidate.id, attempt);
+        ruleClassified++;
+      } catch (error) {
+        ruleErrors++;
+        this.logger.error(
+          `Sender rule ${match.rule.id} failed to classify normalized email ${candidate.id}`,
+          error,
+        );
+      }
+    }
+
+    if (ruleClassified > 0 || ruleErrors > 0) {
+      this.logger.log(
+        `Sender rules classified ${ruleClassified} email(s) (${ruleErrors} errors)`,
+      );
+    }
+
+    // Circuit breaker: if a prior run hit a quota/auth wall, skip the rest
+    // of the batch cheaply instead of firing one doomed request per email.
     const breaker = this.aiProviderService.getBreakerStatus();
     if (breaker.open) {
       this.logger.warn(
@@ -220,10 +391,11 @@ export class ClassificationService {
           `(${breaker.reason ?? "unknown"}); skipping ${unclassified.length} email(s)`,
       );
       return {
-        processed: 0,
-        errors: 0,
+        processed: ruleClassified,
+        errors: ruleErrors,
         needsReview: 0,
         skipped: unclassified.length,
+        ruleClassified,
       };
     }
 
@@ -236,7 +408,7 @@ export class ClassificationService {
 
     for (const { id } of unclassified) {
       try {
-        const classification = await this.classifyEmail(id);
+        const classification = await this.classifyEmail(id, matcher);
         processed++;
         consecutiveRejections = 0;
         if (classification.needsReview) {
@@ -288,7 +460,13 @@ export class ClassificationService {
         `${errors} errors, ${skipped} deferred)`,
     );
 
-    return { processed, errors, needsReview: needsReviewCount, skipped };
+    return {
+      processed: processed + ruleClassified,
+      errors: errors + ruleErrors,
+      needsReview: needsReviewCount,
+      skipped,
+      ruleClassified,
+    };
   }
 
   private buildInput(
@@ -356,6 +534,7 @@ export class ClassificationService {
     total: number;
     byProvider: Record<string, number>;
     aiClassified: number;
+    ruleClassified: number;
     fallbackClassified: number;
     needsReview: number;
     byCategory: Record<string, number>;
@@ -372,6 +551,7 @@ export class ClassificationService {
       total: allClassifications.length,
       byProvider: {} as Record<string, number>,
       aiClassified: 0,
+      ruleClassified: 0,
       fallbackClassified: 0,
       needsReview: 0,
       byCategory: {} as Record<string, number>,
@@ -381,10 +561,12 @@ export class ClassificationService {
       const provider = c.providerUsed ?? "unknown";
       stats.byProvider[provider] = (stats.byProvider[provider] ?? 0) + 1;
 
-      if (c.providerUsed && c.providerUsed !== "fallback") {
-        stats.aiClassified++;
+      if (c.providerUsed === SENDER_RULE_PROVIDER) {
+        stats.ruleClassified++;
       } else if (c.providerUsed === "fallback") {
         stats.fallbackClassified++;
+      } else if (c.providerUsed) {
+        stats.aiClassified++;
       }
 
       if (c.needsReview) {
