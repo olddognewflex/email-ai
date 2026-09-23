@@ -55,7 +55,8 @@ Required:
   makes every stored IMAP password and refresh token undecryptable.
 
 Optional, schema-validated:
-- `PORT` — default `3000`. The launchd deployment and the `eai` TUI launcher assume `3100`.
+- `PORT` — default `3000`. The launchd deployment, the `eai` TUI launcher and
+  `scripts/daily-digest.sh` assume `3100` (override the script with `EMAIL_AI_API_URL`).
 - `NODE_ENV` — `development` | `test` | `production`, default `development`.
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — required only for Gmail XOAUTH2 accounts;
   the app boots fine without them.

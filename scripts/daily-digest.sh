@@ -35,7 +35,10 @@ case "$STAGE" in
 esac
 
 REPO_DIR="${EMAIL_AI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-API_URL="${EMAIL_AI_API_URL:-http://localhost:3000}"
+# The always-on API runs under launchd on PORT 3100 (see
+# com.odnf.email-ai.api.plist); 3000 is the dev API. Override with
+# EMAIL_AI_API_URL to point a run at the dev server.
+API_URL="${EMAIL_AI_API_URL:-http://localhost:3100}"
 VAULT_DIGEST_DIR="${EMAIL_AI_DIGEST_DIR:-$HOME/Documents/obsidian/Qi/20-notes/email-digests}"
 STATE_DIR="${EMAIL_AI_STATE_DIR:-$HOME/.local/state/email-ai}"
 CAPTURED_IDS_FILE="$STATE_DIR/captured-ids.txt"
