@@ -9,6 +9,7 @@ import {
   type ClassificationDetail,
 } from "../api.js";
 import { CategoryPicker } from "./CategoryPicker.js";
+import { AddRulePrompt } from "./AddRulePrompt.js";
 
 export interface DetailScreenProps {
   id: string;
@@ -23,6 +24,8 @@ export interface DetailScreenProps {
 interface Status {
   text: string;
   isError: boolean;
+  /** Informational: nothing changed, not an error (default text color). */
+  neutral?: boolean;
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -86,13 +89,14 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scroll, setScroll] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [blockOpen, setBlockOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const flash = (text: string, isError = false) => {
+  const flash = (text: string, isError = false, neutral = false) => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
-    setStatus({ text, isError });
+    setStatus({ text, isError, neutral });
     statusTimer.current = setTimeout(() => setStatus(null), 4000);
   };
 
@@ -118,6 +122,7 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
     setLoadError(null);
     setScroll(0);
     setPickerOpen(false);
+    setBlockOpen(false);
     fetchDetail(id)
       .then((res) => {
         if (!cancelled) setDetail(res.data);
@@ -211,6 +216,8 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
         void approve();
       } else if (input === "r") {
         setPickerOpen(true);
+      } else if (input === "x") {
+        if (detail) setBlockOpen(true);
       } else if (input === "n") {
         void next();
       } else if (input === "o") {
@@ -226,7 +233,7 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
         }
       }
     },
-    { isActive: !pickerOpen },
+    { isActive: !pickerOpen && !blockOpen },
   );
 
   if (loadError) {
@@ -292,7 +299,7 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
 
       {/* The picker takes the place of the rule + body boxes so the
           screen height never exceeds the terminal while it is open. */}
-      {!pickerOpen && (
+      {!pickerOpen && !blockOpen && (
         <>
           <Box flexShrink={0} flexDirection="column" borderStyle="round" borderColor="green" paddingX={1}>
             <Text bold color="green">
@@ -337,15 +344,31 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
           setPickerOpen(false);
           flash("Reject cancelled");
         }} />
+      ) : blockOpen ? (
+        <AddRulePrompt
+          fromAddress={email.fromAddress}
+          senderDomain={email.senderDomain}
+          sourceId={id}
+          onDone={(message, tone) => {
+            setBlockOpen(false);
+            flash(message, tone === "error", tone === "info");
+          }}
+          onCancel={() => {
+            setBlockOpen(false);
+            flash("Block cancelled");
+          }}
+        />
       ) : (
         <Text dimColor>
-          a approve · r reject · n next · o open web
+          a approve · r reject · x block sender · n next · o open web
           {email.unsubscribeLink ? " · u unsubscribe" : ""} · j/k scroll · b back · q quit
         </Text>
       )}
 
       {status ? (
-        <Text color={status.isError ? "red" : "green"}>{status.text}</Text>
+        <Text color={status.isError ? "red" : status.neutral ? undefined : "green"}>
+          {status.text}
+        </Text>
       ) : busy ? (
         <Text dimColor>Working…</Text>
       ) : (

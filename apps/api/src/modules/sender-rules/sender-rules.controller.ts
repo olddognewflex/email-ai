@@ -7,12 +7,15 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from "@nestjs/common";
 import {
   CreateSenderRule,
   CreateSenderRuleSchema,
   SenderRulePreviewRequest,
   SenderRulePreviewRequestSchema,
+  SenderRuleSuggestionsQuery,
+  SenderRuleSuggestionsQuerySchema,
   UpdateSenderRule,
   UpdateSenderRuleSchema,
 } from "@email-ai/shared";
@@ -36,6 +39,15 @@ export class SenderRulesController {
     body: SenderRulePreviewRequest,
   ) {
     return this.service.preview(body);
+  }
+
+  // Read-only. Declared before :id so "suggestions" is never read as an id.
+  @Get("suggestions")
+  suggestions(
+    @Query(new ZodValidationPipe(SenderRuleSuggestionsQuerySchema))
+    query: SenderRuleSuggestionsQuery,
+  ) {
+    return this.service.suggestions(query);
   }
 
   @Get(":id")

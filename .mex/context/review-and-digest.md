@@ -93,6 +93,16 @@ final category" has to prefer `reviewDecision.correctedCategory` over
   through those helpers — email content is attacker-controlled.
 - **`apps/tui`** — an Ink/React keyboard TUI launched by the `eai` shim, which defaults to
   `PORT=3100` to match the launchd deployment while the app's own default is 3000.
+  Besides review, it manages sender rules. `x` (`AddRulePrompt`) blocks the current sender
+  by address or domain. The default is `trash`/`delete`; the alternative is `classify` with
+  a category. It shows a `/sender-rules/preview` count first (only `y` confirms, after the
+  count loads; Enter never does) and marks the rule with
+  `source: "tui"` and note `tui:block <classificationId>`. `R` (`RulesScreen`) toggles and
+  deletes rules. `G` (`SuggestionsScreen`) reads `/sender-rules/suggestions`. It creates a
+  family's proposed `classify` rules after a y/n confirm that lists every rule and previews
+  each glob. The TUI talks to whatever API
+  runs on its port. An API older than these endpoints returns a 404, which the TUI shows as
+  a "does not support this yet" message instead of crashing.
 
 Approve/reject links embedded in the digest markdown hit the GET-based `*ViaLink` endpoints so
 they work from a plain Obsidian note; `DIGEST_LINK_BASE_URL` sets their host.

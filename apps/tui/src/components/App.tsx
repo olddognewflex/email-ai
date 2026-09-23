@@ -10,10 +10,14 @@ import {
 export type QueueView = "review" | "actionable";
 import { ListScreen } from "./ListScreen.js";
 import { DetailScreen } from "./DetailScreen.js";
+import { RulesScreen } from "./RulesScreen.js";
+import { SuggestionsScreen } from "./SuggestionsScreen.js";
 
 type Mode =
   | { type: "list" }
   | { type: "detail"; id: string }
+  | { type: "rules" }
+  | { type: "suggestions" }
   | { type: "done" };
 
 export interface AppProps {
@@ -163,6 +167,14 @@ export function App({ initialId }: AppProps) {
     return <DoneScreen reviewed={reviewedCount.current} />;
   }
 
+  if (mode.type === "rules") {
+    return <RulesScreen onBack={handleBack} />;
+  }
+
+  if (mode.type === "suggestions") {
+    return <SuggestionsScreen onBack={handleBack} />;
+  }
+
   if (mode.type === "detail") {
     return (
       <DetailScreen
@@ -186,6 +198,8 @@ export function App({ initialId }: AppProps) {
       onToggleWindow={toggleWindow}
       onSelect={(id) => setMode({ type: "detail", id })}
       onActed={handleListActed}
+      onOpenRules={() => setMode({ type: "rules" })}
+      onOpenSuggestions={() => setMode({ type: "suggestions" })}
     />
   );
 }

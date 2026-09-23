@@ -10,11 +10,17 @@ import {
   CreateSenderRule,
   CreateSenderRuleSchema,
   SenderRulePreviewRequest,
+  SenderRuleSuggestionsQuery,
+  SenderRuleSuggestionsResponse,
   UpdateSenderRule,
   senderPatternTarget,
 } from "@email-ai/shared";
 import { DatabaseService } from "../database/database.service";
 import { SenderRuleMatcher, compileRules } from "./sender-rule-matcher";
+import {
+  DomainClassificationStats,
+  suggestSenderRules,
+} from "./sender-rule-suggestions";
 import {
   isProtectedDomain,
   protectedHitWarnings,
@@ -286,6 +292,44 @@ export class SenderRulesService {
       unclassifiedMatches,
       domains: domains.slice(0, PREVIEW_TOP_DOMAINS),
       protectedHits: [...hits].sort(),
+    };
+  }
+
+  /**
+   * Rule suggestions from classification history: per sender domain, how
+   * much `provider`-classified mail was marketing or newsletter, grouped
+   * into look-alike families. Read-only: never creates a rule.
+   */
+  async suggestions(
+    query: SenderRuleSuggestionsQuery,
+  ): Promise<SenderRuleSuggestionsResponse> {
+    const [rows, rules] = await Promise.all([
+      this.db.$queryRaw<
+        { domain: string; total: number; marketing: number; newsletter: number }[]
+      >(Prisma.sql`
+        SELECT lower(n."senderDomain") AS domain,
+               COUNT(*)::int AS total,
+               (COUNT(*) FILTER (WHERE c.category = 'marketing'))::int AS marketing,
+               (COUNT(*) FILTER (WHERE c.category = 'newsletter'))::int AS newsletter
+        FROM "EmailClassification" c
+        JOIN "NormalizedEmail" n ON n.id = c."normalizedEmailId"
+        WHERE c."providerUsed" = ${query.provider}
+        GROUP BY lower(n."senderDomain")
+      `),
+      this.db.senderRule.findMany({ where: { enabled: true } }),
+    ]);
+    const stats: DomainClassificationStats[] = rows.map((r) => ({
+      domain: r.domain,
+      total: Number(r.total),
+      marketing: Number(r.marketing),
+      newsletter: Number(r.newsletter),
+    }));
+    return {
+      families: suggestSenderRules(
+        stats,
+        { minEmails: query.minEmails, minShare: query.minShare },
+        rules,
+      ),
     };
   }
 

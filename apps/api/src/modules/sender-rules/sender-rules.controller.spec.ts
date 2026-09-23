@@ -105,7 +105,16 @@ function makeDb() {
     ),
   };
 
-  return { rows, senderRule, normalizedEmail, parsedEmail };
+  // Per-domain classification counts for GET /sender-rules/suggestions.
+  const $queryRaw = jest.fn(async () => [
+    { domain: "news.getthefinnewsnow.com", total: 573, marketing: 570, newsletter: 0 },
+    { domain: "News.Financialspiration.com", total: 549, marketing: 549, newsletter: 0 },
+    { domain: "kickstarter.com", total: 93, marketing: 10, newsletter: 5 },
+    { domain: "kickstargo.com", total: 230, marketing: 230, newsletter: 0 },
+    { domain: "tiny.example.com", total: 3, marketing: 3, newsletter: 0 },
+  ]);
+
+  return { rows, senderRule, normalizedEmail, parsedEmail, $queryRaw };
 }
 
 describe("SenderRulesController (HTTP)", () => {
@@ -470,6 +479,103 @@ describe("SenderRulesController (HTTP)", () => {
           .send(body)
           .expect(400);
       }
+    });
+  });
+
+  describe("GET /sender-rules/suggestions", () => {
+    const get = (qs = "") =>
+      request(app.getHttpServer()).get(`/sender-rules/suggestions${qs}`);
+
+    /** Bound values of the Prisma.sql template passed to $queryRaw. */
+    const sqlValues = () =>
+      (db.$queryRaw.mock.calls.at(-1) as unknown as [{ values: unknown[] }])[0]
+        .values;
+
+    it("is routed before :id and defaults to typesafe, 20 emails, 90%", async () => {
+      const res = await get().expect(200);
+
+      expect(sqlValues()).toEqual(["typesafe"]);
+      expect(res.body.families.map((f: { key: string }) => f.key)).toEqual([
+        "news.*.com",
+        "kickstargo.com",
+      ]);
+      // Two news.<x>.com members are too few for a news.*.com glob, so each
+      // member gets a domain rule.
+      expect(res.body.families[0]).toEqual({
+        key: "news.*.com",
+        kind: "news-subdomain",
+        totalEmails: 573 + 549,
+        domains: [
+          { domain: "news.getthefinnewsnow.com", total: 573, share: 0.9948 },
+          { domain: "news.financialspiration.com", total: 549, share: 1 },
+        ],
+        proposedRules: [
+          {
+            pattern: "news.getthefinnewsnow.com",
+            matchType: "domain",
+            action: "classify",
+            category: "marketing",
+          },
+          {
+            pattern: "news.financialspiration.com",
+            matchType: "domain",
+            action: "classify",
+            category: "marketing",
+          },
+        ],
+        excludedLegit: [],
+      });
+      expect(db.senderRule.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("passes provider, minEmails and minShare through", async () => {
+      const res = await get("?provider=openai&minEmails=500&minShare=0.99").expect(200);
+      expect(sqlValues()).toEqual(["openai"]);
+      // 570/573 = 0.9948 >= 0.99 and 549/549; kickstargo is under 500.
+      expect(res.body.families.map((f: { key: string }) => f.key)).toEqual([
+        "news.*.com",
+      ]);
+      const low = await get("?minEmails=1&minShare=0.5").expect(200);
+      // Singles are keyed by registrable domain; the hostname is a member.
+      const single = low.body.families.find(
+        (f: { key: string }) => f.key === "example.com",
+      );
+      expect(single.domains).toEqual([
+        { domain: "tiny.example.com", total: 3, share: 1 },
+      ]);
+    });
+
+    it("rejects invalid params with 400", async () => {
+      for (const qs of [
+        "?minEmails=0",
+        "?minEmails=abc",
+        "?minShare=0",
+        "?minShare=1.5",
+        "?provider=type%20safe;drop",
+      ]) {
+        await get(qs).expect(400);
+      }
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it("never writes: no rule is created, updated or deleted", async () => {
+      await get("?minEmails=1").expect(200);
+      expect(db.senderRule.create).not.toHaveBeenCalled();
+      expect(db.senderRule.update).not.toHaveBeenCalled();
+      expect(db.senderRule.delete).not.toHaveBeenCalled();
+      expect(db.rows.size).toBe(0);
+    });
+
+    it("skips domains an enabled rule already covers", async () => {
+      await post({
+        pattern: "kickstargo.com",
+        matchType: "domain",
+        category: "marketing",
+      }).expect(201);
+      const res = await get().expect(200);
+      expect(res.body.families.map((f: { key: string }) => f.key)).not.toContain(
+        "kickstargo.com",
+      );
     });
   });
 

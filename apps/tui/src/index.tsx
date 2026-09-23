@@ -10,10 +10,18 @@ Usage:
 Environment:
   PORT   API port (default 3000, current target ${API_BASE})
 Keys (list):    j/k or arrows move · enter open · a approve · r reject
-                s sync all accounts · q quit
+                x block sender · s sync all accounts · q quit
+                R sender rules · G rule suggestions
 Keys (detail):  a approve · r reject (pick corrected category, esc cancels)
-                n next pending · o open web view · j/k scroll body
-                b or esc back to list · q quit
+                x block sender · n next pending · o open web view
+                j/k scroll body · b or esc back to list · q quit
+Keys (rules):   space enable/disable · d delete (y/n) · b back
+Keys (suggest): c create the family's rules (y/n) · b back
+Block (x):      pick this address or this domain, then trash (default,
+                category delete) or classify with a category; shows how
+                much stored mail matches before you confirm. Rules only
+                pre-classify for now: trash rules will move mail to Trash
+                once mailbox writes are enabled.
 `;
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {
