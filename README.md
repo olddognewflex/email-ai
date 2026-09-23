@@ -87,7 +87,10 @@ pnpm --filter @email-ai/api test:cov
 | PUT    | /ai-providers/:id               | Update AI provider configuration               |
 | POST   | /ai-providers/:id/activate      | Set active AI provider                         |
 | DELETE | /ai-providers/:id               | Delete AI provider configuration               |
-| GET    | /review-queue                   | List classifications pending review            |
+| GET    | /review-queue                   | List classifications pending review (last 14 days) |
+|        |                                 | `?days=N`, `?since=YYYY-MM-DD`, `?all=true`    |
+| GET    | /review-queue/actionable        | List actionable emails (last 14 days)          |
+|        |                                 | same `days` / `since` / `all` params           |
 | POST   | /review-queue/:id/approve       | Approve a classification                       |
 | POST   | /review-queue/:id/reject        | Reject a classification                        |
 | GET    | /digest                         | Get daily digest as JSON                       |

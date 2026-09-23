@@ -31,8 +31,14 @@ export interface ListScreenProps {
   loading: boolean;
   /** Which list is shown — drives the title and pending/actionable wording. */
   view: QueueView;
+  /** Effective received-date window from the API, e.g. "last 14 days". */
+  windowLabel: string | null;
+  /** Whether the all-mail window is active (drives the w key's label). */
+  showAll: boolean;
   /** t key — switch between the review queue and the actionable list. */
   onToggleView: () => void;
+  /** w key — switch between the default 14-day window and all mail. */
+  onToggleWindow: () => void;
   onSelect: (id: string) => void;
   /** Called after a successful approve/reject so the parent can refresh the queue. */
   onActed: () => void;
@@ -43,7 +49,18 @@ function truncate(value: string, width: number): string {
   return value.length > width ? `${value.slice(0, width - 1)}…` : value;
 }
 
-export function ListScreen({ items, total, loading, view, onToggleView, onSelect, onActed }: ListScreenProps) {
+export function ListScreen({
+  items,
+  total,
+  loading,
+  view,
+  windowLabel,
+  showAll,
+  onToggleView,
+  onToggleWindow,
+  onSelect,
+  onActed,
+}: ListScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [cursor, setCursor] = useState(0);
@@ -119,6 +136,10 @@ export function ListScreen({ items, total, loading, view, onToggleView, onSelect
         if (!busy && !loading) onToggleView();
         return;
       }
+      if (input === "w") {
+        if (!busy && !loading) onToggleWindow();
+        return;
+      }
       if (loading || items.length === 0 || busy) return;
 
       const item = items[safeCursor];
@@ -153,6 +174,8 @@ export function ListScreen({ items, total, loading, view, onToggleView, onSelect
   const title = view === "actionable" ? "Actionable" : "Review queue";
   const countLabel = view === "actionable" ? "actionable" : "pending";
   const toggleLabel = view === "actionable" ? "review queue" : "actionable";
+  const windowToggleLabel = showAll ? "recent only" : "all mail";
+  const windowSuffix = windowLabel ? ` · ${windowLabel}` : "";
 
   const columns = stdout?.columns ?? 80;
   const accountWidth = 10;
@@ -175,13 +198,18 @@ export function ListScreen({ items, total, loading, view, onToggleView, onSelect
   if (items.length === 0) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text bold>{title}</Text>
+        <Text bold>
+          {title}
+          <Text dimColor>{windowSuffix}</Text>
+        </Text>
         <Text>
           {view === "actionable"
             ? "Nothing needs action right now. All caught up."
             : "Nothing pending review. All caught up."}
         </Text>
-        <Text dimColor>t {toggleLabel} · s sync all accounts · q quit</Text>
+        <Text dimColor>
+          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · q quit
+        </Text>
       </Box>
     );
   }
@@ -204,6 +232,7 @@ export function ListScreen({ items, total, loading, view, onToggleView, onSelect
     <Box flexDirection="column" paddingX={1}>
       <Text bold>
         {title} — {total} {countLabel}{items.length < total ? ` (showing ${items.length})` : ""}
+        <Text dimColor>{windowSuffix}</Text>
       </Text>
       <Box columnGap={2}>
         <Box width={accountWidth}>
@@ -283,7 +312,7 @@ export function ListScreen({ items, total, loading, view, onToggleView, onSelect
       ) : (
         <Text dimColor>
           j/k move · enter open · a approve · r reject · o open web
-          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · s sync · q quit
+          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · q quit
         </Text>
       )}
 

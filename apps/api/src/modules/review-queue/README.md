@@ -9,6 +9,10 @@ Emails that need human review are those where:
 - `needsReview` flag is `true` (explicitly flagged by classifier)
 - OR confidence is below the threshold (default: "medium")
 
+Both list views (the review queue and the actionable list) only show mail
+**received** in the last 14 days by default (`DEFAULT_REVIEW_WINDOW_DAYS`),
+filtered on the raw email's `internalDate`. See "Received-date window" below.
+
 User decisions are stored in the `ReviewDecision` table for audit and potential training data.
 
 ## API Endpoints
@@ -22,6 +26,29 @@ List emails pending review with pagination and filtering.
 - `page` (number, optional): Page number, default 1
 - `limit` (number, optional): Items per page, default 20
 - `confidenceThreshold` (string, optional): Minimum confidence to include ("low", "medium", "high"), default "medium"
+- `days` (positive integer, optional): Received-date window in days, default 14
+- `since` (YYYY-MM-DD, optional): Explicit received-date cutoff (local midnight)
+- `all` (`true`, optional): Disable the received-date window
+
+#### Received-date window
+
+`GET /review-queue`, `GET /review-queue/actionable`, and the HTML pages at
+`/review` and `/review/actionable` only include emails whose
+`rawEmail.internalDate` is on or after the window start. The window start
+is local midnight `days` calendar days ago (default 14), or the local
+midnight of `since`. Precedence: `all=true` > `since` > `days` > default.
+A non-positive or non-integer `days`, or a malformed `since`, returns 400.
+The window is ANDed onto each view's own filter; it never replaces it.
+
+The response carries the effective window so clients can display it:
+
+```json
+"window": { "since": "2026-09-09T04:00:00.000Z", "days": 14 }
+```
+
+`since` is `null` when `all=true`; `days` is `null` for an explicit `since`
+or `all=true`. The detail, approve, reject, and recategorize endpoints are
+not windowed.
 
 **Response:**
 
@@ -56,6 +83,10 @@ List emails pending review with pagination and filtering.
     "limit": 20,
     "total": 45,
     "totalPages": 3
+  },
+  "window": {
+    "since": "2026-09-09T04:00:00.000Z",
+    "days": 14
   }
 }
 ```
@@ -140,6 +171,11 @@ curl "http://localhost:3000/review-queue?page=2&limit=10"
 
 # Filter by confidence threshold
 curl "http://localhost:3000/review-queue?confidenceThreshold=high"
+
+# Change or disable the received-date window (default: last 14 days)
+curl "http://localhost:3000/review-queue?days=30"
+curl "http://localhost:3000/review-queue?since=2026-09-01"
+curl "http://localhost:3000/review-queue?all=true"
 ```
 
 ### 3. Test approve/reject endpoints
@@ -188,6 +224,7 @@ ReviewQueueService.getReviewQueue()
 Prisma: Find classifications where
   (needsReview = true OR confidence <= threshold)
   AND no reviewDecision exists
+  AND rawEmail.internalDate >= window start (unless all=true)
   ↓
 Return paginated items with email data
 

@@ -13,6 +13,7 @@ import {
 } from "@nestjs/common";
 import { EmailCategorySchema } from "@email-ai/shared";
 import { ReviewQueueService } from "./review-queue.service";
+import { resolveReviewWindow } from "./review-window";
 
 @Controller("review-queue")
 export class ReviewQueueController {
@@ -25,21 +26,29 @@ export class ReviewQueueController {
     @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query("confidenceThreshold") confidenceThreshold?: string,
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
   ) {
+    // Received-date window: last 14 days by default; widen with
+    // ?days=N or ?since=YYYY-MM-DD, disable with ?all=true.
+    const window = resolveReviewWindow({ days, since, all });
     this.logger.log(
-      `Fetching review queue: page=${page}, limit=${limit}, confidenceThreshold=${confidenceThreshold || "medium"}`,
+      `Fetching review queue: page=${page}, limit=${limit}, confidenceThreshold=${confidenceThreshold || "medium"}, since=${window.since?.toISOString() ?? "all"}`,
     );
 
     const result = await this.reviewQueueService.getReviewQueue(
       page,
       limit,
       confidenceThreshold,
+      window,
     );
 
     return {
       success: true,
       data: result.items,
       pagination: result.pagination,
+      window: result.window,
     };
   }
 
@@ -47,18 +56,26 @@ export class ReviewQueueController {
   async getActionableQueue(
     @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
   ) {
-    this.logger.log(`Fetching actionable queue: page=${page}, limit=${limit}`);
+    const window = resolveReviewWindow({ days, since, all });
+    this.logger.log(
+      `Fetching actionable queue: page=${page}, limit=${limit}, since=${window.since?.toISOString() ?? "all"}`,
+    );
 
     const result = await this.reviewQueueService.getActionableQueue(
       page,
       limit,
+      window,
     );
 
     return {
       success: true,
       data: result.items,
       pagination: result.pagination,
+      window: result.window,
     };
   }
 

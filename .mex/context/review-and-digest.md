@@ -51,6 +51,21 @@ orders by `createdAt desc`, and flattens the four-level Prisma include
 `{ classification, email }` item shape the TUI and the HTML UI both consume. The account
 `label` is surfaced there so a multi-account user can tell mailboxes apart.
 
+Both lists are also limited by a **received-date window** so old mail stays out of them.
+`runQueue()` ANDs `normalizedEmail.parsedEmail.rawEmail.internalDate >= since` onto the view's
+own filter. It narrows the needsReview/confidence and actionable filters and never replaces
+them. The default is the last `DEFAULT_REVIEW_WINDOW_DAYS` (14) days, counted from local
+midnight. `resolveReviewWindow()` in `review-window.ts` reads the `?days=N`,
+`?since=YYYY-MM-DD` (local midnight, same parsing as the digest's `?date`) and `?all=true`
+query params, in that order of precedence: all, then since, then days, then the default.
+Invalid values return 400. The JSON responses include `window: { since, days }`. The HTML
+pages say "Showing mail received since …" with a show-all link. The TUI shows the window
+label in its header, and its `w` key switches between the default window and all mail. The
+JSON detail and decision endpoints are not windowed. The HTML UI carries a non-default window
+(`all`/`since`/`days`) through row links, the detail page's back, approve, reject and image
+links, and the approve/reject-and-next redirects. `getNextPendingId(window)` takes the active
+window, so "next" stays inside the window the user is working.
+
 ## Decisions
 
 [`approveClassification()`](mex://method:6362abbd926799663c9557bc578f1450) and

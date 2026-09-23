@@ -13,6 +13,12 @@ import {
   ClassificationDetail,
   ReviewQueueService,
 } from "./review-queue.service";
+import {
+  DEFAULT_REVIEW_WINDOW_DAYS,
+  formatLocalDate,
+  resolveReviewWindow,
+  ReviewWindow,
+} from "./review-window";
 
 /**
  * Server-rendered web UI for working the review queue. Emails are
@@ -32,26 +38,52 @@ export class ReviewController {
 
   @Get()
   @Header("Content-Type", "text/html")
-  async queuePage(): Promise<string> {
+  async queuePage(
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
+  ): Promise<string> {
+    const window = resolveReviewWindow({ days, since, all });
     const { items, pagination } = await this.reviewQueueService.getReviewQueue(
       1,
       50,
+      undefined,
+      window,
     );
-    return this.queueListPage("review", "Review queue", items, pagination, {
-      empty: "Queue empty — nothing awaiting review. 🎉",
-      count: "pending",
-    });
+    return this.queueListPage(
+      "review",
+      "Review queue",
+      items,
+      pagination,
+      window,
+      {
+        empty: "Queue empty — nothing awaiting review. 🎉",
+        count: "pending",
+      },
+    );
   }
 
   @Get("actionable")
   @Header("Content-Type", "text/html")
-  async actionablePage(): Promise<string> {
+  async actionablePage(
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
+  ): Promise<string> {
+    const window = resolveReviewWindow({ days, since, all });
     const { items, pagination } =
-      await this.reviewQueueService.getActionableQueue(1, 50);
-    return this.queueListPage("actionable", "Actionable", items, pagination, {
-      empty: "Nothing needs action right now. 🎉",
-      count: "actionable",
-    });
+      await this.reviewQueueService.getActionableQueue(1, 50, window);
+    return this.queueListPage(
+      "actionable",
+      "Actionable",
+      items,
+      pagination,
+      window,
+      {
+        empty: "Nothing needs action right now. 🎉",
+        count: "actionable",
+      },
+    );
   }
 
   /** Shared list rendering for the review and actionable queues. */
@@ -62,15 +94,24 @@ export class ReviewController {
       ReturnType<ReviewQueueService["getReviewQueue"]>
     >["items"],
     pagination: { total: number },
+    window: ReviewWindow,
     labels: { empty: string; count: string },
   ): string {
-    const nav = this.nav(view);
-    const detailSuffix = view === "actionable" ? "?from=actionable" : "";
+    const query = esc(windowQuery(window));
+    const nav = this.nav(view, query);
+    const windowLine = this.windowLine(view, window);
+    const detailSuffix = esc(
+      withParams("", [
+        ...(view === "actionable" ? ["from=actionable"] : []),
+        ...windowParams(window),
+      ]),
+    );
 
     if (items.length === 0) {
       return this.page(
         title,
         `${nav}<h1>${esc(title)}</h1>
+${windowLine}
 <p style="color: #888">${esc(labels.empty)}</p>`,
       );
     }
@@ -98,6 +139,7 @@ export class ReviewController {
     return this.page(
       title,
       `${nav}<h1>${esc(title)}</h1>
+${windowLine}
 <p style="color: #888">${pagination.total} ${esc(labels.count)} (showing up to 50)</p>
 <table>
 <thead><tr><th>Account</th><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
@@ -108,8 +150,24 @@ ${rows}
     );
   }
 
+  /**
+   * The active received-date window, with a link to widen it to all mail
+   * (or back to the default window when already showing everything).
+   */
+  private windowLine(
+    view: "review" | "actionable",
+    window: ReviewWindow,
+  ): string {
+    const base = view === "actionable" ? "/review/actionable" : "/review";
+    if (!window.since) {
+      return `<p style="color: #888">Showing all mail · <a href="${base}">last ${DEFAULT_REVIEW_WINDOW_DAYS} days</a></p>`;
+    }
+    const days = window.days !== null ? ` (last ${window.days} days)` : "";
+    return `<p style="color: #888">Showing mail received since ${esc(formatLocalDate(window.since))}${esc(days)} · <a href="${base}?all=true">show all</a></p>`;
+  }
+
   /** Top nav linking the two queue views; the active one is bolded. */
-  private nav(active: "review" | "actionable"): string {
+  private nav(active: "review" | "actionable", query = ""): string {
     const link = (
       href: string,
       label: string,
@@ -119,8 +177,8 @@ ${rows}
         ? `<strong>${esc(label)}</strong>`
         : `<a href="${href}">${esc(label)}</a>`;
     return `<nav style="margin-bottom: 1rem; color: #888">
-${link("/review", "Needs review", active === "review")} ·
-${link("/review/actionable", "Actionable", active === "actionable")}
+${link(`/review${query}`, "Needs review", active === "review")} ·
+${link(`/review/actionable${query}`, "Actionable", active === "actionable")}
 </nav>`;
   }
 
@@ -130,22 +188,30 @@ ${link("/review/actionable", "Actionable", active === "actionable")}
     @Param("id") id: string,
     @Query("images") images?: string,
     @Query("from") fromView?: string,
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
   ): Promise<string> {
+    const window = resolveReviewWindow({ days, since, all });
     const detail = await this.reviewQueueService.getClassificationDetail(id);
     const allowImages = images === "1";
 
-    // Which list the user came from, so every link back out (approve,
-    // reject, image toggle, decision redirect) returns to the same view.
+    // Which list (and received-date window) the user came from, so every
+    // link back out (back, approve, reject, image toggle, decision
+    // redirect) returns to the same view with the same window.
     const origin: "review" | "actionable" =
       fromView === "actionable" ? "actionable" : "review";
-    const backHref = origin === "actionable" ? "/review/actionable" : "/review";
+    const backHref = esc(
+      (origin === "actionable" ? "/review/actionable" : "/review") +
+        windowQuery(window),
+    );
     const backLabel =
       origin === "actionable" ? "actionable" : "review queue";
-    const fromSuffix = origin === "actionable" ? "from=actionable" : "";
-    const withFrom = (path: string): string => {
-      if (!fromSuffix) return path;
-      return path + (path.includes("?") ? "&" : "?") + fromSuffix;
-    };
+    const carried = [
+      ...(origin === "actionable" ? ["from=actionable"] : []),
+      ...windowParams(window),
+    ];
+    const withFrom = (path: string): string => esc(withParams(path, carried));
 
     const from = detail.email.fromName
       ? `${detail.email.fromName} <${detail.email.fromAddress ?? ""}>`
@@ -197,7 +263,7 @@ ${
 ${rejectAsButtons}
 </div>
 <h2>Email body</h2>
-${this.bodySection(detail, id, allowImages, origin)}`,
+${this.bodySection(detail, id, allowImages, carried)}`,
     );
   }
 
@@ -206,10 +272,15 @@ ${this.bodySection(detail, id, allowImages, origin)}`,
   async approveAndNext(
     @Param("id") id: string,
     @Query("from") fromView?: string,
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
   ) {
+    // Resolve before acting so an invalid window 400s without a decision.
+    const window = resolveReviewWindow({ days, since, all });
     this.logger.log(`Approving classification ${id} (web UI)`);
     await this.reviewQueueService.approveClassification(id);
-    return this.redirectToNext(fromView);
+    return this.redirectToNext(fromView, window);
   }
 
   @Get(":id/reject")
@@ -218,7 +289,11 @@ ${this.bodySection(detail, id, allowImages, origin)}`,
     @Param("id") id: string,
     @Query("category") category?: string,
     @Query("from") fromView?: string,
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
   ) {
+    const window = resolveReviewWindow({ days, since, all });
     let correctedCategory: string | undefined;
     if (category !== undefined) {
       const parsed = EmailCategorySchema.safeParse(category);
@@ -235,24 +310,27 @@ ${this.bodySection(detail, id, allowImages, origin)}`,
         (correctedCategory ? ` -> ${correctedCategory}` : ""),
     );
     await this.reviewQueueService.rejectClassification(id, correctedCategory);
-    return this.redirectToNext(fromView);
+    return this.redirectToNext(fromView, window);
   }
 
   /**
    * After a web-UI decision, return to where the user was. The actionable
    * list isn't decision-gated (items don't disappear), so there's no
    * "next pending" to advance to — go back to the list. The review queue
-   * advances to the next item still awaiting review.
+   * advances to the next item still awaiting review within the active
+   * received-date window. Every redirect keeps a non-default window.
    */
   private async redirectToNext(
-    fromView?: string,
+    fromView: string | undefined,
+    window: ReviewWindow,
   ): Promise<{ url: string; statusCode: number }> {
+    const query = windowQuery(window);
     if (fromView === "actionable") {
-      return { url: "/review/actionable", statusCode: 302 };
+      return { url: `/review/actionable${query}`, statusCode: 302 };
     }
-    const nextId = await this.reviewQueueService.getNextPendingId();
+    const nextId = await this.reviewQueueService.getNextPendingId(window);
     return {
-      url: nextId ? `/review/${encodeURIComponent(nextId)}` : "/review",
+      url: nextId ? `/review/${encodeURIComponent(nextId)}${query}` : `/review${query}`,
       statusCode: 302,
     };
   }
@@ -292,17 +370,16 @@ ${reasons}
     detail: ClassificationDetail,
     id: string,
     allowImages: boolean,
-    origin: "review" | "actionable",
+    carried: string[],
   ): string {
     if (!detail.body.html) {
       return `<pre class="body-text">${esc(detail.body.text)}</pre>`;
     }
 
-    const fromSuffix = origin === "actionable" ? "&from=actionable" : "";
     const base = `/review/${encodeURIComponent(id)}`;
     const toggle = allowImages
-      ? `<p><a href="${base}${origin === "actionable" ? "?from=actionable" : ""}">Block remote images</a></p>`
-      : `<p><a href="${base}?images=1${fromSuffix}">Load remote images</a></p>`;
+      ? `<p><a href="${esc(withParams(base, carried))}">Block remote images</a></p>`
+      : `<p><a href="${esc(withParams(base, ["images=1", ...carried]))}">Load remote images</a></p>`;
 
     // sandbox="" blocks scripts, forms, popups, and same-origin access.
     // On top of that, a CSP <meta> injected into the srcdoc blocks
@@ -355,6 +432,34 @@ code { background: #f0f0f0; padding: 0.1rem 0.3rem; border-radius: 4px; }
 ${body}
 </body></html>`;
   }
+}
+
+/**
+ * Query params that reproduce a non-default window (none for the
+ * default), so links and redirects keep the user's window. Built from
+ * the validated window, not raw input. Raw URL text: callers esc() it
+ * when interpolating into HTML.
+ */
+function windowParams(window: ReviewWindow): string[] {
+  if (!window.since) return ["all=true"];
+  if (window.days === null) {
+    return [`since=${formatLocalDate(window.since)}`];
+  }
+  if (window.days !== DEFAULT_REVIEW_WINDOW_DAYS) {
+    return [`days=${window.days}`];
+  }
+  return [];
+}
+
+/** `?`-prefixed form of windowParams(), or "" for the default window. */
+function windowQuery(window: ReviewWindow): string {
+  return withParams("", windowParams(window));
+}
+
+/** Append `key=value` params to a path, joining with ? or & as needed. */
+function withParams(path: string, params: string[]): string {
+  if (params.length === 0) return path;
+  return path + (path.includes("?") ? "&" : "?") + params.join("&");
 }
 
 /** Escape an untrusted string for interpolation into HTML markup. */

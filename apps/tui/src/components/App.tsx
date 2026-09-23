@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
-import { fetchActionable, fetchQueue, type QueueItem } from "../api.js";
+import {
+  describeWindow,
+  fetchActionable,
+  fetchQueue,
+  type QueueItem,
+} from "../api.js";
 
 export type QueueView = "review" | "actionable";
 import { ListScreen } from "./ListScreen.js";
@@ -25,28 +30,50 @@ export function App({ initialId }: AppProps) {
   const [loading, setLoading] = useState(!initialId);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [view, setView] = useState<QueueView>("review");
+  // false = API default received-date window (last 14 days); true = all mail.
+  const [showAll, setShowAll] = useState(false);
+  const [windowLabel, setWindowLabel] = useState<string | null>(null);
   const reviewedCount = useRef(0);
 
-  const load = useCallback(async (v: QueueView): Promise<QueueItem[]> => {
-    const res = await (v === "actionable" ? fetchActionable : fetchQueue)(1, 50);
+  const load = useCallback(async (v: QueueView, all: boolean): Promise<QueueItem[]> => {
+    const res = await (v === "actionable" ? fetchActionable : fetchQueue)(1, 50, all);
     setItems(res.data);
     setTotal(res.pagination.total);
+    setWindowLabel(describeWindow(res.window));
     return res.data;
   }, []);
 
-  const refresh = useCallback((): Promise<QueueItem[]> => load(view), [load, view]);
+  const refresh = useCallback(
+    (): Promise<QueueItem[]> => load(view, showAll),
+    [load, view, showAll],
+  );
+
+  /** Reload after switching view or window, surfacing failures as fatal. */
+  const reload = useCallback(
+    (v: QueueView, all: boolean) => {
+      setLoading(true);
+      load(v, all)
+        .catch((err: unknown) => {
+          setFatalError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setLoading(false));
+    },
+    [load],
+  );
 
   /** Switch between the review queue and the actionable list, reloading. */
   const toggleView = useCallback(() => {
     const nextView: QueueView = view === "review" ? "actionable" : "review";
     setView(nextView);
-    setLoading(true);
-    load(nextView)
-      .catch((err: unknown) => {
-        setFatalError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => setLoading(false));
-  }, [view, load]);
+    reload(nextView, showAll);
+  }, [view, showAll, reload]);
+
+  /** Switch between the default 14-day window and all mail, reloading. */
+  const toggleWindow = useCallback(() => {
+    const nextAll = !showAll;
+    setShowAll(nextAll);
+    reload(view, nextAll);
+  }, [view, showAll, reload]);
 
   // Initial queue load when starting on the list screen.
   useEffect(() => {
@@ -153,7 +180,10 @@ export function App({ initialId }: AppProps) {
       total={total}
       loading={loading}
       view={view}
+      windowLabel={windowLabel}
+      showAll={showAll}
       onToggleView={toggleView}
+      onToggleWindow={toggleWindow}
       onSelect={(id) => setMode({ type: "detail", id })}
       onActed={handleListActed}
     />
