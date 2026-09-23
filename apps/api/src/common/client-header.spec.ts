@@ -1,6 +1,8 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { AppModule } from '../app.module';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { appProviders } from '../app.providers';
 import { ClientHeaderGuard } from './client-header';
 
 const ctx = (method: string, headers: Record<string, string> = {}) =>
@@ -22,8 +24,11 @@ describe('ClientHeaderGuard', () => {
     expect(guard.canActivate(ctx(m, { 'x-email-ai-client': 'eai-tui' }))).toBe(true);
   });
 
-  it('is registered globally (APP_GUARD) in AppModule', () => {
-    const providers = Reflect.getMetadata('providers', AppModule) as { provide?: unknown; useClass?: unknown }[];
-    expect(providers).toContainEqual({ provide: APP_GUARD, useClass: ClientHeaderGuard });
+  // AppModule itself is not imported: its ConfigModule validates the env at
+  // import time, which throws in CI (no .env) and crashes the jest worker.
+  it('is registered globally (APP_GUARD) via appProviders in AppModule', () => {
+    expect(appProviders).toContainEqual({ provide: APP_GUARD, useClass: ClientHeaderGuard });
+    const appModuleSource = readFileSync(join(__dirname, '..', 'app.module.ts'), 'utf8');
+    expect(appModuleSource).toMatch(/providers:\s*appProviders/);
   });
 });

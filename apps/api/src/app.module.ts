@@ -1,6 +1,5 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
-import { ClientHeaderGuard } from "./common/client-header";
+import { appProviders } from "./app.providers";
 import { AiProviderModule } from "./modules/ai-provider/ai-provider.module";
 import { ClassificationModule } from "./modules/classification/classification.module";
 import { ConfigModule } from "./modules/config/config.module";
@@ -34,6 +33,6 @@ import { SenderRulesModule } from "./modules/sender-rules/sender-rules.module";
     DigestModule,
   ],
   // Every non-GET/HEAD/OPTIONS request needs X-Email-AI-Client (CSRF).
-  providers: [{ provide: APP_GUARD, useClass: ClientHeaderGuard }],
+  providers: appProviders,
 })
 export class AppModule {}
