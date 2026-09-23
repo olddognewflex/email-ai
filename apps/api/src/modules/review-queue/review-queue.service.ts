@@ -356,9 +356,14 @@ export class ReviewQueueService {
     };
   }
 
-  /** Id of the next pending review item, or null when the queue is empty. */
-  async getNextPendingId(): Promise<string | null> {
-    const { items } = await this.getReviewQueue(1, 1);
+  /**
+   * Id of the next pending review item within the received-date window
+   * (default: last 14 days), or null when that window is empty.
+   */
+  async getNextPendingId(
+    window: ReviewWindow = defaultReviewWindow(),
+  ): Promise<string | null> {
+    const { items } = await this.getReviewQueue(1, 1, undefined, window);
     return items[0]?.classification.id ?? null;
   }
 

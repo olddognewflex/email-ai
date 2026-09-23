@@ -130,4 +130,19 @@ describe("ReviewQueueService received-date window", () => {
       take: 20,
     });
   });
+
+  it("getNextPendingId follows the given window", async () => {
+    const { service, db } = makeService();
+
+    await service.getNextPendingId({ since: null, days: null });
+    await service.getNextPendingId();
+
+    expect(db.emailClassification.findMany.mock.calls[0][0]).toMatchObject({
+      where: REVIEW_WHERE,
+      take: 1,
+    });
+    expect(db.emailClassification.findMany.mock.calls[1][0].where).toEqual({
+      AND: [REVIEW_WHERE, receivedSince(defaultSince())],
+    });
+  });
 });

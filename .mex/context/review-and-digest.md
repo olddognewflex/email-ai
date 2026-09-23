@@ -61,8 +61,10 @@ query params, in that order of precedence: all, then since, then days, then the 
 Invalid values return 400. The JSON responses include `window: { since, days }`. The HTML
 pages say "Showing mail received since …" with a show-all link. The TUI shows the window
 label in its header, and its `w` key switches between the default window and all mail. The
-detail and decision endpoints are not windowed. `getNextPendingId()` uses the default window,
-so the web UI's approve/reject-and-next moves only through recent mail.
+JSON detail and decision endpoints are not windowed. The HTML UI carries a non-default window
+(`all`/`since`/`days`) through row links, the detail page's back, approve, reject and image
+links, and the approve/reject-and-next redirects. `getNextPendingId(window)` takes the active
+window, so "next" stays inside the window the user is working.
 
 ## Decisions
 

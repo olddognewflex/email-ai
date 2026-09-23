@@ -16,6 +16,49 @@ describe("Review queue window query params", () => {
     getReviewQueue: jest.fn(),
     getActionableQueue: jest.fn(),
     getClassificationDetail: jest.fn(),
+    getNextPendingId: jest.fn(),
+    approveClassification: jest.fn(),
+    rejectClassification: jest.fn(),
+  };
+  const detail = {
+    id: "c1",
+    category: "receipt",
+    importance: "low",
+    urgency: "none",
+    recommendedAction: "archive",
+    confidence: "low",
+    reason: "because",
+    needsReview: true,
+    providerUsed: null,
+    createdAt: new Date(2026, 8, 20),
+    reviewDecision: null,
+    rule: { category: null, confidence: null, reasons: [] },
+    email: {
+      subject: "Hello",
+      fromAddress: "a@example.com",
+      fromName: null,
+      toAddresses: [],
+      ccAddresses: [],
+      date: new Date(2026, 8, 20),
+      attachmentCount: 0,
+      unsubscribeLink: null,
+      senderDomain: "example.com",
+      accountLabel: null,
+      isNewsletter: false,
+      isBulk: false,
+      tags: [],
+    },
+    body: { text: "", html: "<p>hi</p>" },
+  };
+  const item = {
+    classification: { id: "c1", category: "receipt", confidence: "low" },
+    email: {
+      subject: "Hello",
+      fromAddress: "a@example.com",
+      fromName: null,
+      accountLabel: null,
+      unsubscribeLink: null,
+    },
   };
 
   beforeAll(async () => {
@@ -44,6 +87,9 @@ describe("Review queue window query params", () => {
     service.getActionableQueue.mockImplementation((_p, _l, w) =>
       Promise.resolve(listResult(w.since, w.days)),
     );
+    service.getClassificationDetail.mockResolvedValue(detail);
+    service.approveClassification.mockResolvedValue({});
+    service.rejectClassification.mockResolvedValue({});
   });
 
   describe("GET /review-queue", () => {
@@ -171,6 +217,128 @@ describe("Review queue window query params", () => {
         .expect(400);
       expect(service.getReviewQueue).not.toHaveBeenCalled();
       expect(res.headers["content-type"]).toMatch(/json/);
+    });
+  });
+
+  describe("window carried through HTML navigation and decisions", () => {
+    const withItems = (w: { since: Date | null; days: number | null }) => ({
+      ...listResult(w.since, w.days),
+      items: [item],
+      pagination: { page: 1, limit: 50, total: 1, totalPages: 1 },
+    });
+
+    it("default window emits no extra params", async () => {
+      service.getReviewQueue.mockImplementation((_p, _l, _c, w) =>
+        Promise.resolve(withItems(w)),
+      );
+      service.getNextPendingId.mockResolvedValue(null);
+      const server = app.getHttpServer();
+
+      const list = await request(server).get("/review").expect(200);
+      expect(list.text).toContain('<a href="/review/c1">Hello</a>');
+      expect(list.text).toContain('<a href="/review/actionable">Actionable</a>');
+
+      const page = await request(server).get("/review/c1").expect(200);
+      expect(page.text).toContain('<a href="/review">← Back to review queue</a>');
+      expect(page.text).toContain('href="/review/c1/approve"');
+
+      await request(server)
+        .get("/review/c1/approve")
+        .expect(302)
+        .expect("Location", "/review");
+      expect(service.getNextPendingId).toHaveBeenCalledWith({
+        since: new Date(2026, 8, 9),
+        days: 14,
+      });
+    });
+
+    it("row links carry the window, combined with from=actionable", async () => {
+      service.getActionableQueue.mockImplementation((_p, _l, w) =>
+        Promise.resolve(withItems(w)),
+      );
+      service.getReviewQueue.mockImplementation((_p, _l, _c, w) =>
+        Promise.resolve(withItems(w)),
+      );
+      const server = app.getHttpServer();
+
+      const actionable = await request(server)
+        .get("/review/actionable?all=true")
+        .expect(200);
+      expect(actionable.text).toContain(
+        '<a href="/review/c1?from=actionable&amp;all=true">Hello</a>',
+      );
+
+      const review = await request(server).get("/review?days=3").expect(200);
+      expect(review.text).toContain('<a href="/review/c1?days=3">Hello</a>');
+    });
+
+    it("detail back, decision and image links carry the window", async () => {
+      const server = app.getHttpServer();
+
+      const page = await request(server)
+        .get("/review/c1?from=actionable&since=2026-09-01")
+        .expect(200);
+      expect(page.text).toContain(
+        '<a href="/review/actionable?since=2026-09-01">← Back to actionable</a>',
+      );
+      expect(page.text).toContain(
+        'href="/review/c1/approve?from=actionable&amp;since=2026-09-01"',
+      );
+      expect(page.text).toContain(
+        'href="/review/c1/reject?category=receipt&amp;from=actionable&amp;since=2026-09-01"',
+      );
+      expect(page.text).toContain(
+        'href="/review/c1?images=1&amp;from=actionable&amp;since=2026-09-01"',
+      );
+
+      const all = await request(server).get("/review/c1?all=true").expect(200);
+      expect(all.text).toContain('<a href="/review?all=true">← Back to review queue</a>');
+    });
+
+    it("approve-and-next under all=true keeps all=true when a next item exists", async () => {
+      service.getNextPendingId.mockResolvedValue("c2");
+
+      await request(app.getHttpServer())
+        .get("/review/c1/approve?all=true")
+        .expect(302)
+        .expect("Location", "/review/c2?all=true");
+      expect(service.approveClassification).toHaveBeenCalledWith("c1");
+      expect(service.getNextPendingId).toHaveBeenCalledWith({
+        since: null,
+        days: null,
+      });
+    });
+
+    it("approve-and-next under all=true keeps all=true in the empty fallback", async () => {
+      service.getNextPendingId.mockResolvedValue(null);
+
+      await request(app.getHttpServer())
+        .get("/review/c1/approve?all=true")
+        .expect(302)
+        .expect("Location", "/review?all=true");
+    });
+
+    it("reject-and-next keeps since, and actionable returns to its list", async () => {
+      service.getNextPendingId.mockResolvedValue(null);
+      const server = app.getHttpServer();
+
+      await request(server)
+        .get("/review/c1/reject?category=receipt&since=2026-09-01")
+        .expect(302)
+        .expect("Location", "/review?since=2026-09-01");
+      expect(service.rejectClassification).toHaveBeenCalledWith("c1", "receipt");
+
+      await request(server)
+        .get("/review/c1/reject?from=actionable&days=3")
+        .expect(302)
+        .expect("Location", "/review/actionable?days=3");
+    });
+
+    it("rejects an invalid window before recording a decision", async () => {
+      await request(app.getHttpServer())
+        .get("/review/c1/approve?days=0")
+        .expect(400);
+      expect(service.approveClassification).not.toHaveBeenCalled();
     });
   });
 });

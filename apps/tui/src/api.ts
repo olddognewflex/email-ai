@@ -183,7 +183,10 @@ export function describeWindow(window: QueueWindow | undefined): string | null {
   if (!window) return null;
   if (!window.since) return "all mail";
   if (window.days !== null) return `last ${window.days} days`;
-  return `since ${window.since.slice(0, 10)}`;
+  // Local calendar date: slicing the UTC ISO string is a day off east of UTC.
+  const d = new Date(window.since);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `since ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 export function fetchDetail(id: string): Promise<DetailResponse> {
