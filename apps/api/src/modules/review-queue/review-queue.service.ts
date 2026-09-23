@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { convert } from "html-to-text";
 import { DatabaseService } from "../database/database.service";
 import { ReviewDecisionType } from "@prisma/client";
+import { defaultReviewWindow, ReviewWindow } from "./review-window";
 
 export interface ReviewQueueItem {
   classification: {
@@ -34,6 +35,14 @@ export interface ReviewQueueResponse {
     limit: number;
     total: number;
     totalPages: number;
+  };
+  /**
+   * Effective received-date window. `since` is an ISO timestamp (null =
+   * no filter, ?all=true); `days` is null for an explicit ?since or ?all.
+   */
+  window: {
+    since: string | null;
+    days: number | null;
   };
 }
 
@@ -92,7 +101,7 @@ export interface ClassificationDetail {
  * the user to do something. Mirrors DigestService.determineActionabilityGroup
  * so the in-app Actionable view matches the digest's Actionable section.
  */
-const ACTIONABLE_WHERE = {
+export const ACTIONABLE_WHERE = {
   OR: [
     { category: "needs_attention" },
     { category: "personal", importance: { in: ["high", "critical"] } },
@@ -112,6 +121,7 @@ export class ReviewQueueService {
     page: number = 1,
     limit: number = 20,
     confidenceThreshold?: string,
+    window: ReviewWindow = defaultReviewWindow(),
   ): Promise<ReviewQueueResponse> {
     const threshold = confidenceThreshold || this.DEFAULT_CONFIDENCE_THRESHOLD;
 
@@ -130,7 +140,7 @@ export class ReviewQueueService {
       reviewDecision: null,
     };
 
-    return this.runQueue(whereClause, page, limit);
+    return this.runQueue(whereClause, page, limit, window);
   }
 
   /**
@@ -142,17 +152,37 @@ export class ReviewQueueService {
   async getActionableQueue(
     page: number = 1,
     limit: number = 20,
+    window: ReviewWindow = defaultReviewWindow(),
   ): Promise<ReviewQueueResponse> {
-    return this.runQueue(ACTIONABLE_WHERE, page, limit);
+    return this.runQueue(ACTIONABLE_WHERE, page, limit, window);
   }
 
-  /** Shared list query + projection for the review and actionable queues. */
+  /**
+   * Shared list query + projection for the review and actionable queues.
+   * The received-date window is ANDed onto the view's own filter so it
+   * narrows the selection without replacing it.
+   */
   private async runQueue(
-    where: any,
+    baseWhere: any,
     page: number,
     limit: number,
+    window: ReviewWindow,
   ): Promise<ReviewQueueResponse> {
     const skip = (page - 1) * limit;
+    const where = window.since
+      ? {
+          AND: [
+            baseWhere,
+            {
+              normalizedEmail: {
+                parsedEmail: {
+                  rawEmail: { internalDate: { gte: window.since } },
+                },
+              },
+            },
+          ],
+        }
+      : baseWhere;
 
     const [classifications, total] = await Promise.all([
       this.db.emailClassification.findMany({
@@ -220,6 +250,10 @@ export class ReviewQueueService {
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+      },
+      window: {
+        since: window.since ? window.since.toISOString() : null,
+        days: window.days,
       },
     };
   }

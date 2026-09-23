@@ -13,6 +13,12 @@ import {
   ClassificationDetail,
   ReviewQueueService,
 } from "./review-queue.service";
+import {
+  DEFAULT_REVIEW_WINDOW_DAYS,
+  formatLocalDate,
+  resolveReviewWindow,
+  ReviewWindow,
+} from "./review-window";
 
 /**
  * Server-rendered web UI for working the review queue. Emails are
@@ -32,26 +38,52 @@ export class ReviewController {
 
   @Get()
   @Header("Content-Type", "text/html")
-  async queuePage(): Promise<string> {
+  async queuePage(
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
+  ): Promise<string> {
+    const window = resolveReviewWindow({ days, since, all });
     const { items, pagination } = await this.reviewQueueService.getReviewQueue(
       1,
       50,
+      undefined,
+      window,
     );
-    return this.queueListPage("review", "Review queue", items, pagination, {
-      empty: "Queue empty — nothing awaiting review. 🎉",
-      count: "pending",
-    });
+    return this.queueListPage(
+      "review",
+      "Review queue",
+      items,
+      pagination,
+      window,
+      {
+        empty: "Queue empty — nothing awaiting review. 🎉",
+        count: "pending",
+      },
+    );
   }
 
   @Get("actionable")
   @Header("Content-Type", "text/html")
-  async actionablePage(): Promise<string> {
+  async actionablePage(
+    @Query("days") days?: string,
+    @Query("since") since?: string,
+    @Query("all") all?: string,
+  ): Promise<string> {
+    const window = resolveReviewWindow({ days, since, all });
     const { items, pagination } =
-      await this.reviewQueueService.getActionableQueue(1, 50);
-    return this.queueListPage("actionable", "Actionable", items, pagination, {
-      empty: "Nothing needs action right now. 🎉",
-      count: "actionable",
-    });
+      await this.reviewQueueService.getActionableQueue(1, 50, window);
+    return this.queueListPage(
+      "actionable",
+      "Actionable",
+      items,
+      pagination,
+      window,
+      {
+        empty: "Nothing needs action right now. 🎉",
+        count: "actionable",
+      },
+    );
   }
 
   /** Shared list rendering for the review and actionable queues. */
@@ -62,15 +94,19 @@ export class ReviewController {
       ReturnType<ReviewQueueService["getReviewQueue"]>
     >["items"],
     pagination: { total: number },
+    window: ReviewWindow,
     labels: { empty: string; count: string },
   ): string {
-    const nav = this.nav(view);
+    const query = windowQuery(window);
+    const nav = this.nav(view, query);
+    const windowLine = this.windowLine(view, window);
     const detailSuffix = view === "actionable" ? "?from=actionable" : "";
 
     if (items.length === 0) {
       return this.page(
         title,
         `${nav}<h1>${esc(title)}</h1>
+${windowLine}
 <p style="color: #888">${esc(labels.empty)}</p>`,
       );
     }
@@ -98,6 +134,7 @@ export class ReviewController {
     return this.page(
       title,
       `${nav}<h1>${esc(title)}</h1>
+${windowLine}
 <p style="color: #888">${pagination.total} ${esc(labels.count)} (showing up to 50)</p>
 <table>
 <thead><tr><th>Account</th><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
@@ -108,8 +145,24 @@ ${rows}
     );
   }
 
+  /**
+   * The active received-date window, with a link to widen it to all mail
+   * (or back to the default window when already showing everything).
+   */
+  private windowLine(
+    view: "review" | "actionable",
+    window: ReviewWindow,
+  ): string {
+    const base = view === "actionable" ? "/review/actionable" : "/review";
+    if (!window.since) {
+      return `<p style="color: #888">Showing all mail · <a href="${base}">last ${DEFAULT_REVIEW_WINDOW_DAYS} days</a></p>`;
+    }
+    const days = window.days !== null ? ` (last ${window.days} days)` : "";
+    return `<p style="color: #888">Showing mail received since ${esc(formatLocalDate(window.since))}${esc(days)} · <a href="${base}?all=true">show all</a></p>`;
+  }
+
   /** Top nav linking the two queue views; the active one is bolded. */
-  private nav(active: "review" | "actionable"): string {
+  private nav(active: "review" | "actionable", query = ""): string {
     const link = (
       href: string,
       label: string,
@@ -119,8 +172,8 @@ ${rows}
         ? `<strong>${esc(label)}</strong>`
         : `<a href="${href}">${esc(label)}</a>`;
     return `<nav style="margin-bottom: 1rem; color: #888">
-${link("/review", "Needs review", active === "review")} ·
-${link("/review/actionable", "Actionable", active === "actionable")}
+${link(`/review${query}`, "Needs review", active === "review")} ·
+${link(`/review/actionable${query}`, "Actionable", active === "actionable")}
 </nav>`;
   }
 
@@ -355,6 +408,22 @@ code { background: #f0f0f0; padding: 0.1rem 0.3rem; border-radius: 4px; }
 ${body}
 </body></html>`;
   }
+}
+
+/**
+ * Query string that reproduces a non-default window, so the nav keeps
+ * the user's window when switching views. Built from the validated
+ * window (not raw input) and HTML-escaped for use in an href.
+ */
+function windowQuery(window: ReviewWindow): string {
+  if (!window.since) return "?all=true";
+  if (window.days === null) {
+    return `?since=${esc(formatLocalDate(window.since))}`;
+  }
+  if (window.days !== DEFAULT_REVIEW_WINDOW_DAYS) {
+    return `?days=${window.days}`;
+  }
+  return "";
 }
 
 /** Escape an untrusted string for interpolation into HTML markup. */

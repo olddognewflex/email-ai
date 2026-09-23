@@ -41,10 +41,21 @@ export interface Pagination {
   totalPages: number;
 }
 
+/**
+ * Effective received-date window the API applied. `since` is an ISO
+ * timestamp (null = all mail); `days` is null for an explicit since/all.
+ */
+export interface QueueWindow {
+  since: string | null;
+  days: number | null;
+}
+
 export interface QueueResponse {
   success: boolean;
   data: QueueItem[];
   pagination: Pagination;
+  /** Absent from API builds that predate the received-date window. */
+  window?: QueueWindow;
 }
 
 /** Shape returned by GET /review-queue/:id (detail endpoint). */
@@ -150,15 +161,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return json as T;
 }
 
-export function fetchQueue(page = 1, limit = 50): Promise<QueueResponse> {
-  return request<QueueResponse>(`/review-queue?page=${page}&limit=${limit}`);
+/**
+ * Review queue. Without `all`, the API applies its default received-date
+ * window (last 14 days); `all` disables it.
+ */
+export function fetchQueue(page = 1, limit = 50, all = false): Promise<QueueResponse> {
+  return request<QueueResponse>(
+    `/review-queue?page=${page}&limit=${limit}${all ? "&all=true" : ""}`,
+  );
 }
 
 /** Emails the classifier flagged as needing action (the digest's Actionable set). */
-export function fetchActionable(page = 1, limit = 50): Promise<QueueResponse> {
+export function fetchActionable(page = 1, limit = 50, all = false): Promise<QueueResponse> {
   return request<QueueResponse>(
-    `/review-queue/actionable?page=${page}&limit=${limit}`,
+    `/review-queue/actionable?page=${page}&limit=${limit}${all ? "&all=true" : ""}`,
   );
+}
+
+/** Short label for the effective window, e.g. "last 14 days" or "all mail". */
+export function describeWindow(window: QueueWindow | undefined): string | null {
+  if (!window) return null;
+  if (!window.since) return "all mail";
+  if (window.days !== null) return `last ${window.days} days`;
+  return `since ${window.since.slice(0, 10)}`;
 }
 
 export function fetchDetail(id: string): Promise<DetailResponse> {
