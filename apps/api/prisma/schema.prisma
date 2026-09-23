@@ -53,6 +53,10 @@ model RawEmail {
   rawSource    Bytes
   internalDate DateTime
   flags        String[]
+  /// IMAP UIDVALIDITY of `mailbox` at fetch time, as a decimal string
+  /// (unsigned 32-bit: overflows Int; BigInt breaks JSON serialization).
+  /// Null for rows ingested before this column existed.
+  uidValidity  String?
   createdAt    DateTime @default(now())
 
   account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)

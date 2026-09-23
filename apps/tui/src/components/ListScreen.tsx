@@ -9,6 +9,7 @@ import {
   type QueueItem,
 } from "../api.js";
 import { CategoryPicker, CATEGORY_PICKER_HEIGHT } from "./CategoryPicker.js";
+import { AddRulePrompt, ADD_RULE_PROMPT_HEIGHT } from "./AddRulePrompt.js";
 
 function openExternal(url: string): void {
   const child = spawn("open", [url], { detached: true, stdio: "ignore" });
@@ -42,6 +43,10 @@ export interface ListScreenProps {
   onSelect: (id: string) => void;
   /** Called after a successful approve/reject so the parent can refresh the queue. */
   onActed: () => void;
+  /** R key — sender rules screen. */
+  onOpenRules: () => void;
+  /** G key — rule suggestions screen. */
+  onOpenSuggestions: () => void;
 }
 
 function truncate(value: string, width: number): string {
@@ -60,22 +65,29 @@ export function ListScreen({
   onToggleWindow,
   onSelect,
   onActed,
+  onOpenRules,
+  onOpenSuggestions,
 }: ListScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [cursor, setCursor] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [blockOpen, setBlockOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<{ text: string; isError: boolean } | null>(null);
+  const [status, setStatus] = useState<{
+    text: string;
+    isError: boolean;
+    neutral?: boolean;
+  } | null>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clamp against the live list so acting on the last row stays in bounds
   // after the parent removes the acted item and re-renders.
   const safeCursor = Math.min(cursor, Math.max(0, items.length - 1));
 
-  const flash = (text: string, isError = false) => {
+  const flash = (text: string, isError = false, neutral = false) => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
-    setStatus({ text, isError });
+    setStatus({ text, isError, neutral });
     statusTimer.current = setTimeout(() => setStatus(null), 4000);
   };
 
@@ -140,6 +152,14 @@ export function ListScreen({
         if (!busy && !loading) onToggleWindow();
         return;
       }
+      if (input === "R") {
+        if (!busy) onOpenRules();
+        return;
+      }
+      if (input === "G") {
+        if (!busy) onOpenSuggestions();
+        return;
+      }
       if (loading || items.length === 0 || busy) return;
 
       const item = items[safeCursor];
@@ -153,6 +173,8 @@ export function ListScreen({
         if (item) void approve(item.classification.id);
       } else if (input === "r") {
         if (item) setPickerOpen(true);
+      } else if (input === "x") {
+        if (item) setBlockOpen(true);
       } else if (input === "o") {
         if (item) {
           openExternal(`${API_BASE}/review/${item.classification.id}`);
@@ -168,7 +190,7 @@ export function ListScreen({
         }
       }
     },
-    { isActive: !pickerOpen },
+    { isActive: !pickerOpen && !blockOpen },
   );
 
   const title = view === "actionable" ? "Actionable" : "Review queue";
@@ -208,7 +230,7 @@ export function ListScreen({
             : "Nothing pending review. All caught up."}
         </Text>
         <Text dimColor>
-          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · q quit
+          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · R rules · G suggestions · q quit
         </Text>
       </Box>
     );
@@ -219,7 +241,8 @@ export function ListScreen({
   // combined frame overflows the terminal, scrolls the alt-screen, and leaves a
   // ghosted header several lines down once the picker closes.
   const rows = stdout?.rows ?? 24;
-  const reserved = 6 + (pickerOpen ? CATEGORY_PICKER_HEIGHT : 0);
+  const reserved =
+    6 + (pickerOpen ? CATEGORY_PICKER_HEIGHT : blockOpen ? ADD_RULE_PROMPT_HEIGHT : 0);
   const viewportHeight = Math.max(3, rows - reserved);
   const start = Math.max(
     0,
@@ -309,15 +332,31 @@ export function ListScreen({
             flash("Reject cancelled");
           }}
         />
+      ) : blockOpen && selectedItem ? (
+        <AddRulePrompt
+          fromAddress={selectedItem.email.fromAddress}
+          senderDomain={selectedItem.email.senderDomain}
+          sourceId={selectedItem.classification.id}
+          onDone={(message, tone) => {
+            setBlockOpen(false);
+            flash(message, tone === "error", tone === "info");
+          }}
+          onCancel={() => {
+            setBlockOpen(false);
+            flash("Block cancelled");
+          }}
+        />
       ) : (
         <Text dimColor>
-          j/k move · enter open · a approve · r reject · o open web
-          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · q quit
+          j/k move · enter open · a approve · r reject · x block sender · o open web
+          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · R rules · G suggestions · q quit
         </Text>
       )}
 
       {status ? (
-        <Text color={status.isError ? "red" : "green"}>{status.text}</Text>
+        <Text color={status.isError ? "red" : status.neutral ? undefined : "green"}>
+          {status.text}
+        </Text>
       ) : busy ? (
         <Text dimColor>Working…</Text>
       ) : (

@@ -515,3 +515,71 @@ export const SenderRuleSchema = z.object({
 });
 
 export type SenderRule = z.infer<typeof SenderRuleSchema>;
+
+/**
+ * Query for GET /sender-rules/suggestions. `minEmails` is the smallest
+ * family total worth suggesting; `minShare` is the share of a domain's
+ * `provider`-classified mail that must be marketing or newsletter for the
+ * domain to join a family.
+ */
+export const SenderRuleSuggestionsQuerySchema = z.object({
+  minEmails: z.coerce.number().int().min(1).max(1_000_000).default(20),
+  minShare: z.coerce.number().gt(0).max(1).default(0.9),
+  provider: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9_-]{1,40}$/i, "provider must be a provider name like typesafe")
+    .default("typesafe"),
+});
+
+export type SenderRuleSuggestionsQuery = z.output<
+  typeof SenderRuleSuggestionsQuerySchema
+>;
+
+/**
+ * How a suggested family was grouped:
+ * - `prefix`         domains sharing a leading token (>= 5 chars) on the
+ *                    second-level label (`kickstar*`, `backer*`)
+ * - `news-subdomain` `news.<name>.<tld>` domains
+ * - `single`         one domain on its own
+ */
+export const SenderRuleSuggestionKindSchema = z.enum([
+  "prefix",
+  "news-subdomain",
+  "single",
+]);
+
+export type SenderRuleSuggestionKind = z.infer<
+  typeof SenderRuleSuggestionKindSchema
+>;
+
+export const SenderRuleSuggestionFamilySchema = z.object({
+  key: z.string(),
+  kind: SenderRuleSuggestionKindSchema,
+  totalEmails: z.number().int(),
+  domains: z.array(
+    z.object({ domain: z.string(), total: z.number().int(), share: z.number() }),
+  ),
+  proposedRules: z.array(
+    z.object({
+      pattern: z.string(),
+      matchType: SenderRuleMatchTypeSchema,
+      action: z.literal("classify"),
+      category: z.enum(["marketing", "newsletter"]),
+    }),
+  ),
+  /** Legitimate or mixed senders a family glob would also have caught. */
+  excludedLegit: z.array(z.string()),
+});
+
+export type SenderRuleSuggestionFamily = z.infer<
+  typeof SenderRuleSuggestionFamilySchema
+>;
+
+export const SenderRuleSuggestionsResponseSchema = z.object({
+  families: z.array(SenderRuleSuggestionFamilySchema),
+});
+
+export type SenderRuleSuggestionsResponse = z.infer<
+  typeof SenderRuleSuggestionsResponseSchema
+>;

@@ -16,10 +16,27 @@ export interface CategoryPickerProps {
   onSelect: (category: string | null) => void;
   /** esc — abort the reject entirely, no API call */
   onCancel: () => void;
+  /** Heading; defaults to the reject wording. */
+  title?: string;
+  /**
+   * Show the leading "no correction" option (selects null). Defaults to
+   * true; pickers that always need a category turn it off.
+   */
+  allowNone?: boolean;
+  /** Footer text for esc; defaults to "cancel reject". */
+  cancelLabel?: string;
 }
 
-export function CategoryPicker({ onSelect, onCancel }: CategoryPickerProps) {
-  const options = [NO_CORRECTION, ...EmailCategorySchema.options];
+export function CategoryPicker({
+  onSelect,
+  onCancel,
+  title = "Reject — what should it have been?",
+  allowNone = true,
+  cancelLabel = "cancel reject",
+}: CategoryPickerProps) {
+  const options: string[] = allowNone
+    ? [NO_CORRECTION, ...EmailCategorySchema.options]
+    : [...EmailCategorySchema.options];
   const [cursor, setCursor] = useState(0);
 
   useInput((input, key) => {
@@ -28,7 +45,7 @@ export function CategoryPicker({ onSelect, onCancel }: CategoryPickerProps) {
       return;
     }
     if (key.return) {
-      onSelect(cursor === 0 ? null : options[cursor]);
+      onSelect(allowNone && cursor === 0 ? null : options[cursor]);
       return;
     }
     if (input === "j" || key.downArrow) {
@@ -41,7 +58,7 @@ export function CategoryPicker({ onSelect, onCancel }: CategoryPickerProps) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
       <Text bold color="yellow">
-        Reject — what should it have been?
+        {title}
       </Text>
       {options.map((option, i) => (
         <Text key={option} color={i === cursor ? "cyan" : undefined} inverse={i === cursor}>
@@ -49,7 +66,7 @@ export function CategoryPicker({ onSelect, onCancel }: CategoryPickerProps) {
           {option}
         </Text>
       ))}
-      <Text dimColor>j/k move · enter select · esc cancel reject</Text>
+      <Text dimColor>j/k move · enter select · esc {cancelLabel}</Text>
     </Box>
   );
 }

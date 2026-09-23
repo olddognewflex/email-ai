@@ -99,6 +99,8 @@ pnpm --filter @email-ai/api test:cov
 | PATCH  | /sender-rules/:id               | Update a rule (re-validated) → `{ rule, warnings }` |
 | DELETE | /sender-rules/:id               | Delete a rule (204)                            |
 | POST   | /sender-rules/preview           | Count stored mail a pattern would match (DB only) |
+| GET    | /sender-rules/suggestions       | Suggest rules for look-alike promo families (read-only) |
+|        |                                 | `?minEmails=20&minShare=0.9&provider=typesafe` |
 | GET    | /digest                         | Get daily digest as JSON                       |
 | POST   | /digest/generate                | Generate and save digest to file system        |
 
@@ -341,6 +343,63 @@ The API caches the compiled rules and refreshes the cache only when a rule
 is written through `/sender-rules`. After editing `SenderRule` rows
 directly in the database, restart the API. A classification run uses the
 rules as they were when it started.
+
+#### Rule suggestions
+
+`GET /sender-rules/suggestions` looks at classification history and
+proposes rules. It is read-only: it never creates a rule. For each sender
+domain it counts the mail classified by `provider` (default `typesafe`)
+and the share of it that was `marketing` or `newsletter`. Domains with at
+least `minShare` (default 0.9) qualify, unless they are protected
+look-alikes or an enabled rule already covers them. Qualifying domains are
+grouped into families, and families with fewer than `minEmails` (default
+20) emails in total are dropped:
+
+| `kind`           | Grouping                                                    |
+| ---------------- | ----------------------------------------------------------- |
+| `news-subdomain` | two or more `news.<name>.<tld>` domains (a `news.*.<tld>` glob needs three or more) |
+| `prefix`         | three or more second-level labels sharing a leading token of 5+ characters (`kickstar*`, `backer*`) |
+| `single`         | one registrable domain and any of its qualifying subdomains |
+
+The registrable domain in `single` comes from a simple heuristic: a small
+public-suffix denylist, not the full Public Suffix List. So hosts under a
+shared suffix it doesn't know, such as `com.tr` or `blogspot.com`, can end
+up in one family even when they are unrelated senders. The proposals are
+still exact `domain` rules, one per host, so nothing broader is created.
+Punycode (`xn--`) labels are never grouped by prefix.
+
+Each family proposes `classify` rules with the family's majority category.
+A family glob (`news.*.com`, `promozone*.net`) is proposed only when it
+passes the same validation as `POST /sender-rules` and would not match a
+protected sender (probed with common subdomains such as
+`news.kickstarter.com`) or an observed domain below the share threshold.
+Otherwise every member gets its own `domain` rule and the senders the glob
+would have caught are listed in `excludedLegit`. In practice `kickstar*.com`
+(hits `kickstarter.com`), `backer*.com` (`backerkit.com`) and `news.*.com`
+(`news.kickstarter.com`) all fall back to domain rules. Subdomains
+(`mail.x.com`) always get `domain` rules, never a wildcard.
+
+```bash
+curl 'localhost:3000/sender-rules/suggestions?minEmails=20&minShare=0.9'
+# { "families": [ { "key": "kickstar*.com", "kind": "prefix", "totalEmails": 329,
+#     "domains": [{ "domain": "kickstargo.com", "total": 41, "share": 1 }, ...],
+#     "proposedRules": [{ "pattern": "kickstargo.com", "matchType": "domain",
+#                         "action": "classify", "category": "marketing" }, ...],
+#     "excludedLegit": ["kickstarter.com"] }, ... ] }
+```
+
+#### TUI keys
+
+In `eai`, `x` (list and detail) blocks the current sender: pick **this
+address** or **this domain**, then `trash` (default, category `delete`) or
+`classify` with a category. The prompt shows how much stored mail the rule
+matches before you confirm, and only `y` creates the rule (Enter does not),
+once that count has loaded. The rule is saved with `source: "tui"` and note
+`tui:block <classificationId>`. A duplicate reports "Rule already exists
+(see R)". `R` lists rules (space enables/disables a rule, `d` deletes it
+after y/n). `G` shows suggestions. `c` opens a confirm panel for the
+selected family. The panel lists every rule to be created and, for each
+glob, the preview count and protected hits. `y` then creates the rules.
 
 `action: "trash"` rules (category defaults to `delete`) currently only
 classify. Moving mail to Trash, the `MAILBOX_WRITES_ENABLED` kill switch,

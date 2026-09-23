@@ -90,6 +90,12 @@ export class EmailSyncService implements OnModuleDestroy {
           return { accountId, mailbox, fetchedCount: 0, storedCount: 0, dryRun, lastUid };
         }
 
+        // UIDVALIDITY is an unsigned 32-bit value (imapflow exposes it as a
+        // BigInt); store it as a decimal string so a later mailbox write can
+        // confirm a UID still names the same message.
+        const uidValidity =
+          mailboxInfo.uidValidity != null ? String(mailboxInfo.uidValidity) : null;
+
         const uidRange =
           syncState.lastSyncedUid === 0 ? '1:*' : `${syncState.lastSyncedUid + 1}:*`;
 
@@ -112,6 +118,7 @@ export class EmailSyncService implements OnModuleDestroy {
                 rawSource: Buffer.from(msg.source),
                 internalDate: msg.internalDate ?? new Date(),
                 flags: Array.from(msg.flags ?? []),
+                uidValidity,
               },
               update: {},
             });

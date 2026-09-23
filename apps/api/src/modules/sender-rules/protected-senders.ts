@@ -24,6 +24,16 @@ export const PROTECTED_SENDER_DOMAINS: readonly string[] = [
 const PROBE_SUBDOMAINS = ["", "www.", "me.", "mail.", "email.", "news.", "x."];
 const PROBE_LOCAL_PARTS = ["news", "team", "info", "noreply"];
 
+/**
+ * Protected hostnames probed for domain-targeted patterns: each protected
+ * domain and a handful of common subdomains of it (`news.kickstarter.com`).
+ */
+export function protectedProbeHosts(): string[] {
+  return PROTECTED_SENDER_DOMAINS.flatMap((d) =>
+    PROBE_SUBDOMAINS.map((sub) => `${sub}${d}`),
+  );
+}
+
 /** True when `domain` is a protected domain or a subdomain of one. */
 export function isProtectedDomain(domain: string): boolean {
   const d = domain.trim().toLowerCase();

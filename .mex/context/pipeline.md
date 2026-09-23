@@ -67,6 +67,11 @@ Load-bearing details:
 - On any throw the `SyncState` is set to `ERROR` (best-effort) and the error re-raised; the
   `finally` block always releases the mailbox lock, drops the connection from
   `activeConnections`, and logs out.
+- **`RawEmail.uidValidity`** stores the mailbox's IMAP UIDVALIDITY at fetch time, as a
+  decimal string: it is unsigned 32-bit, so it overflows `Int`, and a `BigInt` would break
+  JSON serialization. It is set on create only, since the upsert's `update` is empty. Rows
+  ingested before the column existed stay `null`. The later mailbox-write path uses it to
+  confirm that a stored UID still names the same message.
 - `syncAll()` iterates active accounts sequentially and collects per-account failures into an
   `errors[]` array rather than aborting — one dead mailbox does not block the rest.
 
@@ -161,6 +166,18 @@ then id desc), so repeatedly failing emails sink to the tail and cannot starve n
 compared against `rawEmail.internalDate`). Use `?since=YYYY-MM-DD` for a wider window or
 `?all=true` for a full backfill. This is why `scripts/daily-digest.sh` passes
 `?since=<yesterday>` — the default cutoff would drop overnight mail.
+
+`GET /sender-rules/suggestions` reads classification history and never writes. One raw
+`GROUP BY lower(senderDomain)` over `EmailClassification` ⋈ `NormalizedEmail` (filtered on
+`providerUsed`) feeds the pure `suggestSenderRules()` in `sender-rule-suggestions.ts`. It
+groups qualifying domains into `news-subdomain`, `prefix` and `single` families. It proposes
+a glob only from three members up (`PREFIX_MIN_MEMBERS`, for `news.*.<tld>` too), and only
+when the glob matches no protected sender (probed with common subdomains) and no
+below-threshold observed domain. Otherwise it proposes per-domain rules and fills
+`excludedLegit`. Singles are grouped by a simple registrable-domain heuristic: a small
+public-suffix denylist, not the full PSL. So `com.tr` or `blogspot.com` hosts may share a
+family, though the proposals stay exact per-host `domain` rules. `xn--` labels skip the
+prefix step.
 
 ## Adding or changing a stage
 
