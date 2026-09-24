@@ -4,17 +4,29 @@ import {
   ApiError,
   createRule,
   errorMessage,
+  matchSenderRule,
   previewRule,
+  type SenderRule,
   type SenderRuleAction,
   type SenderRuleMatchType,
   type SenderRulePreview,
 } from "../api.js";
 import { CategoryPicker, CATEGORY_PICKER_HEIGHT } from "./CategoryPicker.js";
+import {
+  TRASH_PENDING_FLASH,
+  coveredText,
+  normalizeAddress,
+  usableSenderDomain,
+  type FlashTone,
+} from "../sender-block.js";
+
+export { TRASH_PENDING_FLASH, type FlashTone };
 
 /**
  * Rows the prompt can take: the category step renders a CategoryPicker
  * (without its "no correction" row); the other steps a box of at most
- * border 2 + title 1 + 3 option/preview rows + 2 notes + footer 1.
+ * border 2 + title 1 + 3 option/preview rows + 2 notes + footer 1 (the
+ * confirm step: scope, preview, coverage hint, protected hit, trash note).
  * Screens reserve this many lines while the prompt is open.
  */
 export const ADD_RULE_PROMPT_HEIGHT = Math.max(CATEGORY_PICKER_HEIGHT - 1, 9);
@@ -23,9 +35,6 @@ export const ADD_RULE_PROMPT_HEIGHT = Math.max(CATEGORY_PICKER_HEIGHT - 1, 9);
 export const TRASH_PENDING_NOTE =
   "will move to Trash once mailbox writes are enabled; until then it only pre-classifies as delete";
 
-/** Short form for the one-line flash after creating a trash rule. */
-export const TRASH_PENDING_FLASH = "will move to Trash once mailbox writes are enabled";
-
 export interface AddRulePromptProps {
   fromAddress: string | null;
   senderDomain: string | null;
@@ -33,14 +42,13 @@ export interface AddRulePromptProps {
   sourceId: string;
   /**
    * Called once the flow ends, with the flash text for the screen and its
-   * tone: ok (created), info (nothing changed), error.
+   * tone: ok (created), info (nothing changed), error. `rule` is set
+   * only when a rule was created (so the screen can offer `z` undo).
    */
-  onDone: (message: string, tone: FlashTone) => void;
+  onDone: (message: string, tone: FlashTone, rule?: SenderRule) => void;
   /** esc before anything was created. */
   onCancel: () => void;
 }
-
-export type FlashTone = "ok" | "info" | "error";
 
 type Scope = { matchType: SenderRuleMatchType; pattern: string };
 
@@ -55,6 +63,8 @@ type Step =
       category: string;
       preview: SenderRulePreview | null;
       previewError: string | null;
+      /** An enabled rule already covering this sender (advisory only). */
+      covering: SenderRule | null;
     }
   | { kind: "saving" };
 
@@ -62,11 +72,6 @@ const ACTIONS: { action: SenderRuleAction; label: string }[] = [
   { action: "trash", label: "Trash (category delete) — default" },
   { action: "classify", label: "Classify only — pick a category…" },
 ];
-
-function usableDomain(domain: string | null): string | null {
-  const d = domain?.trim().toLowerCase();
-  return d && d !== "unknown" && d.includes(".") ? d : null;
-}
 
 /**
  * x key: block the current email's sender. Scope (address | domain), then
@@ -80,8 +85,8 @@ export function AddRulePrompt({
   onDone,
   onCancel,
 }: AddRulePromptProps) {
-  const address = fromAddress?.trim().toLowerCase() || null;
-  const domain = usableDomain(senderDomain);
+  const address = normalizeAddress(fromAddress);
+  const domain = usableSenderDomain(senderDomain);
   const scopes: (Scope & { label: string })[] = [
     ...(address
       ? [{ matchType: "address" as const, pattern: address, label: `This address  ${address}` }]
@@ -113,6 +118,22 @@ export function AddRulePrompt({
           );
         }
       });
+    // Advisory coverage hint: which enabled rule already covers the chosen
+    // pattern's sender. Failures (e.g. an older API) just show no hint; a
+    // more specific rule is still allowed (exceptions are legitimate).
+    const scope = step.scope;
+    matchSenderRule(
+      scope.matchType === "address"
+        ? { address: scope.pattern, domain }
+        : { domain: scope.pattern },
+    )
+      .then((res) => {
+        if (!cancelled && res.rule) {
+          const covering = res.rule;
+          setStep((s) => (s.kind === "confirm" ? { ...s, covering } : s));
+        }
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -120,7 +141,15 @@ export function AddRulePrompt({
   }, [confirmKey]);
 
   const toConfirm = (scope: Scope, action: SenderRuleAction, category: string) => {
-    setStep({ kind: "confirm", scope, action, category, preview: null, previewError: null });
+    setStep({
+      kind: "confirm",
+      scope,
+      action,
+      category,
+      preview: null,
+      previewError: null,
+      covering: null,
+    });
   };
 
   const save = async (scope: Scope, action: SenderRuleAction, category: string) => {
@@ -140,7 +169,7 @@ export function AddRulePrompt({
         action === "trash" ? TRASH_PENDING_FLASH : `classifies as ${res.rule.category}`,
       );
       parts.push(...res.warnings);
-      onDone(parts.join(" · "), "ok");
+      onDone(parts.join(" · "), "ok", res.rule);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         onDone(`Rule already exists (see R): ${scope.pattern}`, "info");
@@ -220,7 +249,7 @@ export function AddRulePrompt({
   }
 
   if (step.kind === "confirm") {
-    const { scope, action, category, preview, previewError } = step;
+    const { scope, action, category, preview, previewError, covering } = step;
     return box(
       <>
         <Text wrap="truncate-end">
@@ -242,6 +271,11 @@ export function AddRulePrompt({
         ) : (
           <Text dimColor>Counting matching mail…</Text>
         )}
+        {covering ? (
+          <Text color="yellow" wrap="truncate-end">
+            {coveredText(covering, true)}
+          </Text>
+        ) : null}
         {preview && preview.protectedHits.length > 0 ? (
           <Text color="yellow" wrap="truncate-end">
             Protected look-alike: {preview.protectedHits.join(", ")}

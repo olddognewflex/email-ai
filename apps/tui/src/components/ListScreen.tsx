@@ -1,5 +1,4 @@
 import { useRef, useState } from "react";
-import { spawn } from "node:child_process";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import {
   API_BASE,
@@ -10,23 +9,13 @@ import {
 } from "../api.js";
 import { CategoryPicker, CATEGORY_PICKER_HEIGHT } from "./CategoryPicker.js";
 import { AddRulePrompt, ADD_RULE_PROMPT_HEIGHT } from "./AddRulePrompt.js";
-
-function openExternal(url: string): void {
-  const child = spawn("open", [url], { detached: true, stdio: "ignore" });
-  child.on("error", () => {
-    // Swallow spawn failures; the status line already reported the attempt.
-  });
-  child.unref();
-}
-
-/** Only open http(s) links from untrusted email content. */
-function isHttpUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url);
-}
+import { openExternal } from "../open-external.js";
+import { blockOnUnsubscribeEnabled } from "../sender-block.js";
+import { useBlockActions, type UndoBlockProps } from "./useBlockActions.js";
 
 export type QueueView = "review" | "actionable";
 
-export interface ListScreenProps {
+export interface ListScreenProps extends UndoBlockProps {
   items: QueueItem[];
   total: number;
   loading: boolean;
@@ -70,6 +59,9 @@ export function ListScreen({
   onOpenRules,
   onOpenSuggestions,
   onOpenMailboxActions,
+  recentRule,
+  onRuleCreated,
+  onRuleUndone,
 }: ListScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -93,6 +85,14 @@ export function ListScreen({
     setStatus({ text, isError, neutral });
     statusTimer.current = setTimeout(() => setStatus(null), 4000);
   };
+
+  const block = useBlockActions({
+    recentRule,
+    onRuleCreated,
+    onRuleUndone,
+    flash: (text, tone) => flash(text, tone === "error", tone === "info"),
+    setBusy,
+  });
 
   const approve = async (id: string) => {
     setBusy(true);
@@ -139,8 +139,14 @@ export function ListScreen({
 
   useInput(
     (input, key) => {
+      // The z confirm swallows every key until y, n or esc.
+      if (block.handleUndoKey(input, key)) return;
       if (input === "q") {
         exit();
+        return;
+      }
+      if (input === "z") {
+        if (!busy && !loading) block.requestUndo();
         return;
       }
       if (input === "s") {
@@ -188,18 +194,22 @@ export function ListScreen({
           flash("Opened web view in browser");
         }
       } else if (input === "u") {
-        const link = item?.email.unsubscribeLink;
-        if (link && isHttpUrl(link)) {
-          openExternal(link);
-          flash("Opened unsubscribe link in browser");
+        if (item) {
+          block.unsubscribe({
+            unsubscribeLink: item.email.unsubscribeLink,
+            fromAddress: item.email.fromAddress,
+            senderDomain: item.email.senderDomain,
+            classificationId: item.classification.id,
+          });
         } else {
-          flash("No unsubscribe link for this email", true);
+          flash("No email selected", true);
         }
       }
     },
     { isActive: !pickerOpen && !blockOpen },
   );
 
+  const unsubBlockHint = blockOnUnsubscribeEnabled() ? " + block" : "";
   const title = view === "actionable" ? "Actionable" : "Review queue";
   const countLabel = view === "actionable" ? "actionable" : "pending";
   const toggleLabel = view === "actionable" ? "review queue" : "actionable";
@@ -236,8 +246,14 @@ export function ListScreen({
             ? "Nothing needs action right now. All caught up."
             : "Nothing pending review. All caught up."}
         </Text>
+        {block.undoPrompt ? <Text color="yellow">{block.undoPrompt}</Text> : null}
+        {status ? (
+          <Text color={status.isError ? "red" : status.neutral ? undefined : "green"}>
+            {status.text}
+          </Text>
+        ) : null}
         <Text dimColor>
-          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · R rules · G suggestions · M actions · q quit
+          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · z undo block · R rules · G suggestions · M actions · q quit
         </Text>
       </Box>
     );
@@ -344,8 +360,9 @@ export function ListScreen({
           fromAddress={selectedItem.email.fromAddress}
           senderDomain={selectedItem.email.senderDomain}
           sourceId={selectedItem.classification.id}
-          onDone={(message, tone) => {
+          onDone={(message, tone, rule) => {
             setBlockOpen(false);
+            block.rememberRule(rule);
             flash(message, tone === "error", tone === "info");
           }}
           onCancel={() => {
@@ -353,10 +370,12 @@ export function ListScreen({
             flash("Block cancelled");
           }}
         />
+      ) : block.undoPrompt ? (
+        <Text color="yellow">{block.undoPrompt}</Text>
       ) : (
         <Text dimColor>
-          j/k move · enter open · a approve · r reject · x block sender · o open web
-          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · R rules · G suggestions · M actions · q quit
+          j/k move · enter open · a approve · r reject · x block sender · z undo block · o open web
+          {selectedItem?.email.unsubscribeLink ? ` · u unsubscribe${unsubBlockHint}` : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · R rules · G suggestions · M actions · q quit
         </Text>
       )}
 

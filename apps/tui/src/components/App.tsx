@@ -6,6 +6,7 @@ import {
   fetchQueue,
   type QueueItem,
 } from "../api.js";
+import type { RecentRule } from "../sender-block.js";
 
 export type QueueView = "review" | "actionable";
 import { ListScreen } from "./ListScreen.js";
@@ -40,6 +41,14 @@ export function App({ initialId }: AppProps) {
   const [showAll, setShowAll] = useState(false);
   const [windowLabel, setWindowLabel] = useState<string | null>(null);
   const reviewedCount = useRef(0);
+  // The rule this TUI session created most recently (x or u), shared by
+  // the list and detail screens so `z` can undo it from either.
+  const [recentRule, setRecentRule] = useState<RecentRule | null>(null);
+  const undoProps = {
+    recentRule,
+    onRuleCreated: setRecentRule,
+    onRuleUndone: () => setRecentRule(null),
+  };
 
   const load = useCallback(async (v: QueueView, all: boolean): Promise<QueueItem[]> => {
     const res = await (v === "actionable" ? fetchActionable : fetchQueue)(1, 50, all);
@@ -188,6 +197,7 @@ export function App({ initialId }: AppProps) {
         onActed={handleActed}
         onNext={handleNext}
         onBack={handleBack}
+        {...undoProps}
       />
     );
   }
@@ -207,6 +217,7 @@ export function App({ initialId }: AppProps) {
       onOpenRules={() => setMode({ type: "rules" })}
       onOpenSuggestions={() => setMode({ type: "suggestions" })}
       onOpenMailboxActions={() => setMode({ type: "mailboxActions" })}
+      {...undoProps}
     />
   );
 }

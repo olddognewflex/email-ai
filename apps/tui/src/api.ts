@@ -343,13 +343,13 @@ export const OLD_API_MESSAGE =
 /**
  * A 404 that means the route itself is missing (API older than the TUI),
  * rather than a missing record: Nest's "Cannot GET /x", or an older API
- * reading "suggestions" as a rule id.
+ * reading "suggestions" or "match" as a rule id.
  */
 function isMissingRoute(err: unknown): boolean {
   return (
     err instanceof ApiError &&
     err.status === 404 &&
-    /^Cannot (GET|POST|PATCH|DELETE) |^Sender rule suggestions not found/.test(
+    /^Cannot (GET|POST|PATCH|DELETE) |^Sender rule (suggestions|match) not found/.test(
       err.message,
     )
   );
@@ -362,6 +362,28 @@ async function withOldApiMessage<T>(promise: Promise<T>): Promise<T> {
     if (isMissingRoute(err)) throw new ApiError(OLD_API_MESSAGE, 404);
     throw err;
   }
+}
+
+/** GET /sender-rules/match: the enabled rule (if any) covering a sender. */
+export interface SenderRuleMatchResult {
+  rule: SenderRule | null;
+  matchedOn: "address" | "domain" | null;
+}
+
+/**
+ * Read-only: which enabled rule covers this sender, with the precedence
+ * classification uses. At least one of address/domain must be set.
+ */
+export function matchSenderRule(sender: {
+  address?: string | null;
+  domain?: string | null;
+}): Promise<SenderRuleMatchResult> {
+  const qs = new URLSearchParams();
+  if (sender.address) qs.set("address", sender.address);
+  if (sender.domain) qs.set("domain", sender.domain);
+  return withOldApiMessage(
+    request<SenderRuleMatchResult>(`/sender-rules/match?${qs.toString()}`),
+  );
 }
 
 export function listRules(): Promise<SenderRule[]> {

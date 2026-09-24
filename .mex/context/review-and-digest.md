@@ -97,7 +97,15 @@ final category" has to prefer `reviewDecision.correctedCategory` over
   by address or domain. The default is `trash`/`delete`; the alternative is `classify` with
   a category. It shows a `/sender-rules/preview` count first (only `y` confirms, after the
   count loads; Enter never does) and marks the rule with
-  `source: "tui"` and note `tui:block <classificationId>`. `R` (`RulesScreen`) toggles and
+  `source: "tui"` and note `tui:block <classificationId>`. Its confirm step also asks the
+  read-only `GET /sender-rules/match` whether an enabled rule already covers the sender and
+  says so, without blocking the create. `u` opens the unsubscribe link and, once `open`
+  exits 0, blocks the sender's address (never the domain) with a `trash` rule noted
+  `tui:unsubscribe <classificationId>`, unless `/sender-rules/match` finds a covering rule
+  or `EAI_BLOCK_ON_UNSUBSCRIBE` is `0`/`false`/`no`/`off`. `z` deletes, after a y/n, the
+  last rule this TUI session created (App-level state shared by the list and detail
+  screens). The pure parts live in `sender-block.ts`; `useBlockActions` wires them to the
+  screens. `R` (`RulesScreen`) toggles and
   deletes rules. `G` (`SuggestionsScreen`) reads `/sender-rules/suggestions`. It creates a
   family's proposed `classify` rules after a y/n confirm that lists every rule and previews
   each glob. `M` (`MailboxActionsScreen`) lists the `MailboxAction` audit

@@ -102,6 +102,7 @@ Every non-GET request needs an `X-Email-AI-Client` header (any value), and the `
 | DELETE | /sender-rules/:id               | Delete a rule (204)                            |
 | POST   | /sender-rules/preview           | Count stored mail a pattern would match (DB only) |
 | GET    | /sender-rules/suggestions       | Suggest rules for look-alike promo families (read-only) |
+| GET    | /sender-rules/match             | Which enabled rule covers `?address=`/`?domain=` (read-only) |
 |        |                                 | `?minEmails=20&minShare=0.9&provider=typesafe` |
 | POST   | /sender-rules/apply             | Apply enabled `trash` rules to INBOX. **Dry run unless `dryRun=false`** |
 |        |                                 | `?dryRun=true&ruleId=&accountId=&limit=200`; `dryRun=false` needs the kill switch (else 403) |
@@ -406,7 +407,24 @@ address** or **this domain**, then `trash` (default, category `delete`) or
 matches before you confirm, and only `y` creates the rule (Enter does not),
 once that count has loaded. The rule is saved with `source: "tui"` and note
 `tui:block <classificationId>`. A duplicate reports "Rule already exists
-(see R)". `R` lists rules (space enables/disables a rule, `d` deletes it
+(see R)". If an enabled rule already covers the sender, the confirm step
+says so ("Already covered by domain "x.com"") but still lets you create
+the more specific rule, for example as an exception.
+
+`u` (list and detail) opens the email's unsubscribe link and, once `open`
+succeeds, also blocks the sender's **address** (never the domain): a
+`trash` rule with note `tui:unsubscribe <classificationId>`. Unsubscribing
+can take days to take effect, and blocking catches the mail that keeps
+arriving. It checks `GET /sender-rules/match` first and creates nothing
+when an enabled rule already covers the sender. If there is no link, the
+open fails, or the API returns an error, no rule is created. Set
+`EAI_BLOCK_ON_UNSUBSCRIBE=0` (or `false`/`no`/`off`) to only open the link.
+
+`z` (list and detail) undoes the most recent rule created in this TUI
+session by `x` or `u`: it asks "Remove rule <pattern>? y/n" and deletes
+it. Rules created in earlier sessions are removed from `R` instead.
+
+`R` lists rules (space enables/disables a rule, `d` deletes it
 after y/n). `G` shows suggestions. `c` opens a confirm panel for the
 selected family. The panel lists every rule to be created and, for each
 glob, the preview count and protected hits. `y` then creates the rules.

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { spawn } from "node:child_process";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import {
   API_BASE,
@@ -10,8 +9,11 @@ import {
 } from "../api.js";
 import { CategoryPicker } from "./CategoryPicker.js";
 import { AddRulePrompt } from "./AddRulePrompt.js";
+import { openExternal } from "../open-external.js";
+import { blockOnUnsubscribeEnabled } from "../sender-block.js";
+import { useBlockActions, type UndoBlockProps } from "./useBlockActions.js";
 
-export interface DetailScreenProps {
+export interface DetailScreenProps extends UndoBlockProps {
   id: string;
   /** Called after a successful approve/reject so the parent can advance. */
   onActed: (actedId: string) => void;
@@ -61,27 +63,19 @@ const RULE_ROWS = 5; // border 2 + title + category line + reasons line
 const BODY_CHROME_ROWS = 3; // border 2 + title
 const STATUS_ROWS = 1; // always reserved so the layout never shifts
 
-function openExternal(url: string): void {
-  const child = spawn("open", [url], {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.on("error", () => {
-    // Swallow spawn failures; the status line already reported the attempt.
-  });
-  child.unref();
-}
-
 function openWebView(id: string): void {
   openExternal(`${API_BASE}/review/${id}`);
 }
 
-/** Only open http(s) links from untrusted email content. */
-function isHttpUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url);
-}
-
-export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps) {
+export function DetailScreen({
+  id,
+  onActed,
+  onNext,
+  onBack,
+  recentRule,
+  onRuleCreated,
+  onRuleUndone,
+}: DetailScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -99,6 +93,14 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
     setStatus({ text, isError, neutral });
     statusTimer.current = setTimeout(() => setStatus(null), 4000);
   };
+
+  const block = useBlockActions({
+    recentRule,
+    onRuleCreated,
+    onRuleUndone,
+    flash: (text, tone) => flash(text, tone === "error", tone === "info"),
+    setBusy,
+  });
 
   useEffect(() => {
     return () => {
@@ -198,6 +200,8 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
 
   useInput(
     (input, key) => {
+      // The z confirm swallows every key (esc cancels it, not back).
+      if (block.handleUndoKey(input, key)) return;
       if (input === "q") {
         exit();
         return;
@@ -218,18 +222,24 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
         setPickerOpen(true);
       } else if (input === "x") {
         if (detail) setBlockOpen(true);
+      } else if (input === "z") {
+        // Only once the screen (and so the prompt line) is rendered.
+        if (detail) block.requestUndo();
       } else if (input === "n") {
         void next();
       } else if (input === "o") {
         openWebView(id);
         flash("Opened web view in browser");
       } else if (input === "u") {
-        const link = detail?.email.unsubscribeLink;
-        if (link && isHttpUrl(link)) {
-          openExternal(link);
-          flash("Opened unsubscribe link in browser");
+        if (detail) {
+          block.unsubscribe({
+            unsubscribeLink: detail.email.unsubscribeLink,
+            fromAddress: detail.email.fromAddress,
+            senderDomain: detail.email.senderDomain,
+            classificationId: id,
+          });
         } else {
-          flash("No unsubscribe link for this email", true);
+          flash("Email still loading, try again", true);
         }
       }
     },
@@ -349,8 +359,9 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
           fromAddress={email.fromAddress}
           senderDomain={email.senderDomain}
           sourceId={id}
-          onDone={(message, tone) => {
+          onDone={(message, tone, rule) => {
             setBlockOpen(false);
+            block.rememberRule(rule);
             flash(message, tone === "error", tone === "info");
           }}
           onCancel={() => {
@@ -358,10 +369,15 @@ export function DetailScreen({ id, onActed, onNext, onBack }: DetailScreenProps)
             flash("Block cancelled");
           }}
         />
+      ) : block.undoPrompt ? (
+        <Text color="yellow">{block.undoPrompt}</Text>
       ) : (
         <Text dimColor>
-          a approve · r reject · x block sender · n next · o open web
-          {email.unsubscribeLink ? " · u unsubscribe" : ""} · j/k scroll · b back · q quit
+          a approve · r reject · x block sender · z undo block · n next · o open web
+          {email.unsubscribeLink
+            ? ` · u unsubscribe${blockOnUnsubscribeEnabled() ? " + block" : ""}`
+            : ""}{" "}
+          · j/k scroll · b back · q quit
         </Text>
       )}
 
