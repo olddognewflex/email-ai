@@ -105,8 +105,15 @@ final category" has to prefer `reviewDecision.correctedCategory` over
   or `EAI_BLOCK_ON_UNSUBSCRIBE` is `0`/`false`/`no`/`off`. `z` deletes, after a y/n, the
   last rule this TUI session created (App-level state shared by the list and detail
   screens). The pure parts live in `sender-block.ts`; `useBlockActions` wires them to the
-  screens. `R` (`RulesScreen`) toggles and
-  deletes rules. `G` (`SuggestionsScreen`) reads `/sender-rules/suggestions`. It creates a
+  screens. `R` (`RulesScreen`) toggles, edits and
+  deletes rules. `e` opens `EditRulePrompt`, a form pre-filled from the rule (text inputs
+  from `ink-text-input`). It PATCHes only the changed fields, previews a changed pattern or
+  match type, and warns before an edit that makes the rule move mail to Trash, with a dry run
+  of `/sender-rules/apply` scoped to the saved rule. Only `y` saves, after those load. A Zod
+  400 shows under its field and the form keeps its input. After a change to pattern, match
+  type or category it reports the rule's `_count.classifications` from
+  `GET /sender-rules/:id`: those rows stay linked and unchanged. The pure parts live in
+  `rule-edit.ts`. `G` (`SuggestionsScreen`) reads `/sender-rules/suggestions`. It creates a
   family's proposed `classify` rules after a y/n confirm that lists every rule and previews
   each glob. `M` (`MailboxActionsScreen`) lists the `MailboxAction` audit
   log with the kill-switch state from `/mailbox-actions/status` in its

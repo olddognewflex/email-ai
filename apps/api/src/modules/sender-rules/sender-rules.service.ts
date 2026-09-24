@@ -33,6 +33,10 @@ export interface SenderRuleWriteResult {
   warnings: string[];
 }
 
+export type SenderRuleWithCount = SenderRuleRow & {
+  _count: { classifications: number };
+};
+
 export interface SenderRulePreview {
   /** All stored mail the pattern matches. */
   matchedEmails: number;
@@ -76,7 +80,23 @@ export class SenderRulesService {
     });
   }
 
-  async get(id: string): Promise<SenderRuleRow> {
+  /**
+   * One rule plus how many classifications link to it. Editing a rule
+   * never reclassifies that mail, so the TUI reports the count as
+   * "stay linked and unchanged" after an edit.
+   */
+  async get(id: string): Promise<SenderRuleWithCount> {
+    const rule = await this.db.senderRule.findUnique({
+      where: { id },
+      include: { _count: { select: { classifications: true } } },
+    });
+    if (!rule) {
+      throw new NotFoundException(`Sender rule ${id} not found`);
+    }
+    return rule;
+  }
+
+  private async findOrThrow(id: string): Promise<SenderRuleRow> {
     const rule = await this.db.senderRule.findUnique({ where: { id } });
     if (!rule) {
       throw new NotFoundException(`Sender rule ${id} not found`);
@@ -116,7 +136,7 @@ export class SenderRulesService {
     id: string,
     patch: UpdateSenderRule,
   ): Promise<SenderRuleWriteResult> {
-    const existing = await this.get(id);
+    const existing = await this.findOrThrow(id);
     const merged = {
       pattern: existing.pattern,
       matchType: existing.matchType,

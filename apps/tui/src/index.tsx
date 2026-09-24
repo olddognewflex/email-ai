@@ -20,7 +20,7 @@ Keys (detail):  a approve · r reject (pick corrected category, esc cancels)
                 x block sender · z undo block · u unsubscribe + block
                 n next pending · o open web view
                 j/k scroll body · b or esc back to list · q quit
-Keys (rules):   space enable/disable · d delete (y/n) · b back
+Keys (rules):   space enable/disable · e edit · d delete (y/n) · b back
 Keys (suggest): c create the family's rules (y/n) · b back
 Keys (actions): j/k move · u undo a move to Trash (y/n) · f filter by status
                 p preview apply (dry run only) · c reconcile (y/n)
@@ -34,6 +34,12 @@ Block (x):      pick this address or this domain, then trash (default,
 Unsubscribe (u): opens the link; once it opened, blocks this ADDRESS
                 (trash rule, never the domain) unless a rule already
                 covers the sender. EAI_BLOCK_ON_UNSUBSCRIBE=0 turns this off.
+Edit (e):       in R, edit the selected rule's pattern, match type,
+                action, category, enabled and note; sends only what
+                changed. Shows the match preview when pattern or match
+                type changed, and a Trash warning with the saved rule's
+                dry-run count when the edit makes it move mail. Only y
+                saves (never Enter). Past classifications stay unchanged.
 Undo (z):       y/n, then deletes the last rule this session created
                 (by x or u).
 Actions (M):    recent moves to Trash and restores, with the writes

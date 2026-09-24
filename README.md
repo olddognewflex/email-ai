@@ -96,7 +96,7 @@ Every non-GET request needs an `X-Email-AI-Client` header (any value), and the `
 | POST   | /review-queue/:id/approve       | Approve a classification                       |
 | POST   | /review-queue/:id/reject        | Reject a classification                        |
 | GET    | /sender-rules                   | List sender rules                              |
-| GET    | /sender-rules/:id               | Get one sender rule (404 if missing)           |
+| GET    | /sender-rules/:id               | Get one sender rule with `_count.classifications` (404 if missing) |
 | POST   | /sender-rules                   | Create a rule → `{ rule, warnings }` (409 dup) |
 | PATCH  | /sender-rules/:id               | Update a rule (re-validated) → `{ rule, warnings }` |
 | DELETE | /sender-rules/:id               | Delete a rule (204)                            |
@@ -424,8 +424,29 @@ open fails, or the API returns an error, no rule is created. Set
 session by `x` or `u`: it asks "Remove rule <pattern>? y/n" and deletes
 it. Rules created in earlier sessions are removed from `R` instead.
 
-`R` lists rules (space enables/disables a rule, `d` deletes it
-after y/n). `G` shows suggestions. `c` opens a confirm panel for the
+`R` lists rules (space enables/disables a rule, `e` edits it, `d`
+deletes it after y/n).
+
+`e` opens an edit form pre-filled with the selected rule: pattern and
+note are text fields, match type and action are pickers (left/right),
+category opens the category picker (required for `classify`; switching
+to `trash` defaults it to `delete`, as the API does), and space toggles
+enabled. Move with up/down or tab; "Review changes" shows what changed.
+Only the changed fields are sent (`PATCH /sender-rules/:id`), so the
+rule keeps its id, source and creation date. When the pattern or match
+type changed, the review shows the preview count, top domains and
+protected hits. When the edit makes the rule move mail (classify to
+trash, a trash rule's new pattern or match type, or re-enabling a trash
+rule), it also warns "This rule will move matching mail to Trash when
+mailbox writes are enabled" and shows what the saved rule currently
+would move (a dry run of `/sender-rules/apply` scoped to that rule; the
+preview count is the edited rule's). Only `y` saves, once those counts
+have loaded; Enter never saves and `n`/esc go back to the form. A
+validation error appears under its field with your input kept; a
+duplicate says "A rule with this pattern already exists (see R)". Edits
+never reclassify mail: after a change to pattern, match type or
+category the TUI says how many existing classifications stay linked and
+unchanged (`GET /sender-rules/:id` includes `_count.classifications`). `G` shows suggestions. `c` opens a confirm panel for the
 selected family. The panel lists every rule to be created and, for each
 glob, the preview count and protected hits. `y` then creates the rules.
 
