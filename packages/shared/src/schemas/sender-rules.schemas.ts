@@ -517,6 +517,17 @@ export const SenderRuleSchema = z.object({
 export type SenderRule = z.infer<typeof SenderRuleSchema>;
 
 /**
+ * GET /sender-rules/:id: the rule plus how many classifications link to
+ * it. Editing a rule never reclassifies that mail (rules only classify
+ * unclassified mail), so these rows keep their category.
+ */
+export const SenderRuleDetailSchema = SenderRuleSchema.extend({
+  _count: z.object({ classifications: z.number().int().nonnegative() }),
+});
+
+export type SenderRuleDetail = z.infer<typeof SenderRuleDetailSchema>;
+
+/**
  * Query for GET /sender-rules/suggestions. `minEmails` is the smallest
  * family total worth suggesting; `minShare` is the share of a domain's
  * `provider`-classified mail that must be marketing or newsletter for the

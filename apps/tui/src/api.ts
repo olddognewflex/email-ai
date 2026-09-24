@@ -150,6 +150,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** Parsed JSON error body, e.g. a Zod 400's { formErrors, fieldErrors }. */
+    readonly body: unknown = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -194,7 +196,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const raw =
       body?.message ?? zodErrorMessage(json) ?? body?.error ?? `HTTP ${res.status}`;
     const msg = Array.isArray(raw) ? raw.join("; ") : String(raw);
-    throw new ApiError(msg, res.status);
+    throw new ApiError(msg, res.status, json);
   }
 
   return json as T;
@@ -290,6 +292,14 @@ export interface SenderRule {
   source: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * GET /sender-rules/:id: the rule plus its linked classification count.
+ * `_count` is absent from API builds that predate it.
+ */
+export interface SenderRuleDetail extends SenderRule {
+  _count?: { classifications: number };
 }
 
 export interface CreateSenderRuleInput {
@@ -388,6 +398,12 @@ export function matchSenderRule(sender: {
 
 export function listRules(): Promise<SenderRule[]> {
   return withOldApiMessage(request<SenderRule[]>("/sender-rules"));
+}
+
+export function getRule(id: string): Promise<SenderRuleDetail> {
+  return withOldApiMessage(
+    request<SenderRuleDetail>(`/sender-rules/${encodeURIComponent(id)}`),
+  );
 }
 
 export function createRule(input: CreateSenderRuleInput): Promise<SenderRuleWriteResult> {
@@ -625,10 +641,14 @@ export function undoMailboxAction(id: string): Promise<MailboxUndoResult> {
  * code path that could send dryRun=false. Live moves run only from the
  * hourly job (and only when the kill switch is on).
  */
-export function applyRulesDryRun(params: { limit?: number } = {}): Promise<SenderRuleApplyResponse> {
+export function applyRulesDryRun(
+  params: { limit?: number; ruleId?: string } = {},
+): Promise<SenderRuleApplyResponse> {
   const limit = params.limit !== undefined ? `&limit=${encodeURIComponent(String(params.limit))}` : "";
+  // Scoped to one stored rule; the API 400s unless it is an enabled trash rule.
+  const ruleId = params.ruleId !== undefined ? `&ruleId=${encodeURIComponent(params.ruleId)}` : "";
   return withMissingRouteMessage(
-    request<SenderRuleApplyResponse>(`/sender-rules/apply?dryRun=true${limit}`, {
+    request<SenderRuleApplyResponse>(`/sender-rules/apply?dryRun=true${limit}${ruleId}`, {
       method: "POST",
     }),
     APPLY_PREVIEW_UNSUPPORTED_MESSAGE,

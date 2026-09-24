@@ -7,6 +7,7 @@ import {
   updateRule,
   type SenderRule,
 } from "../api.js";
+import { EditRulePrompt } from "./EditRulePrompt.js";
 
 export interface RulesScreenProps {
   /** b/esc — back to the list. */
@@ -19,9 +20,9 @@ function truncate(value: string, width: number): string {
 }
 
 /**
- * R key: every sender rule. space toggles enabled, d deletes after a y/n
- * confirm. Nothing here touches a mailbox; rules only pre-classify until
- * the mailbox-writes kill switch ships.
+ * R key: every sender rule. space toggles enabled, e edits (EditRulePrompt),
+ * d deletes after a y/n confirm. Nothing here touches a mailbox; trash
+ * rules move mail only from the hourly job with mailbox writes enabled.
  */
 export function RulesScreen({ onBack }: RulesScreenProps) {
   const { exit } = useApp();
@@ -34,13 +35,14 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
   // render cannot send a second delete.
   const busyRef = useRef(false);
   const [confirmDelete, setConfirmDelete] = useState<SenderRule | null>(null);
+  const [editing, setEditing] = useState<SenderRule | null>(null);
   const [status, setStatus] = useState<{ text: string; isError: boolean } | null>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const flash = (text: string, isError = false) => {
+  const flash = (text: string, isError = false, ms = 4000) => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
     setStatus({ text, isError });
-    statusTimer.current = setTimeout(() => setStatus(null), 4000);
+    statusTimer.current = setTimeout(() => setStatus(null), ms);
   };
 
   useEffect(() => {
@@ -99,37 +101,43 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
     }
   };
 
-  useInput((input, key) => {
-    if (confirmDelete) {
-      // A repeated y after the first one dispatched must not fire again.
-      if (busyRef.current) return;
-      if (input === "y") void remove(confirmDelete);
-      else if (input === "n" || key.escape) {
-        setConfirmDelete(null);
-        flash("Delete cancelled");
+  useInput(
+    (input, key) => {
+      if (confirmDelete) {
+        // A repeated y after the first one dispatched must not fire again.
+        if (busyRef.current) return;
+        if (input === "y") void remove(confirmDelete);
+        else if (input === "n" || key.escape) {
+          setConfirmDelete(null);
+          flash("Delete cancelled");
+        }
+        return;
       }
-      return;
-    }
-    if (input === "q") {
-      exit();
-      return;
-    }
-    // Stay put while a toggle or delete is in flight.
-    if (busy || busyRef.current) return;
-    if (input === "b" || key.escape) {
-      onBack();
-      return;
-    }
-    if (input === "j" || key.downArrow) {
-      setCursor(Math.min(safeCursor + 1, Math.max(0, list.length - 1)));
-    } else if (input === "k" || key.upArrow) {
-      setCursor(Math.max(safeCursor - 1, 0));
-    } else if (input === " ") {
-      if (selected) void toggle(selected);
-    } else if (input === "d") {
-      if (selected) setConfirmDelete(selected);
-    }
-  });
+      if (input === "q") {
+        exit();
+        return;
+      }
+      // Stay put while a toggle or delete is in flight.
+      if (busy || busyRef.current) return;
+      if (input === "b" || key.escape) {
+        onBack();
+        return;
+      }
+      if (input === "j" || key.downArrow) {
+        setCursor(Math.min(safeCursor + 1, Math.max(0, list.length - 1)));
+      } else if (input === "k" || key.upArrow) {
+        setCursor(Math.max(safeCursor - 1, 0));
+      } else if (input === " ") {
+        if (selected) void toggle(selected);
+      } else if (input === "d") {
+        if (selected) setConfirmDelete(selected);
+      } else if (input === "e") {
+        if (selected) setEditing(selected);
+      }
+    },
+    // The edit form owns the keyboard while it is open.
+    { isActive: !editing },
+  );
 
   const columns = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
@@ -163,6 +171,27 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
     return (
       <Box flexDirection="column" padding={1}>
         <Text>Loading sender rules…</Text>
+      </Box>
+    );
+  }
+
+  if (editing) {
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        {header}
+        <EditRulePrompt
+          rule={editing}
+          onSaved={(rule, message) => {
+            // In place: same id, source and createdAt.
+            setRules((rs) => (rs ?? []).map((r) => (r.id === rule.id ? rule : r)));
+            setEditing(null);
+            flash(message, false, 8000);
+          }}
+          onCancel={() => {
+            setEditing(null);
+            flash("Edit cancelled");
+          }}
+        />
       </Box>
     );
   }
@@ -244,7 +273,7 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
           Delete {confirmDelete.matchType} rule {confirmDelete.pattern}? y delete · n/esc keep
         </Text>
       ) : (
-        <Text dimColor>j/k move · space enable/disable · d delete · b back · q quit</Text>
+        <Text dimColor>j/k move · space enable/disable · e edit · d delete · b back · q quit</Text>
       )}
       {status ? (
         <Text color={status.isError ? "red" : "green"}>{status.text}</Text>

@@ -46,10 +46,20 @@ function makeDb() {
         r.pattern === data.pattern,
     );
 
+  // EmailClassification rows linked to each rule (senderRuleId), for the
+  // `_count` GET /sender-rules/:id includes.
+  const classificationCounts = new Map<string, number>();
+
   const senderRule = {
     findMany: jest.fn(async () => [...rows.values()]),
     findUnique: jest.fn(
-      async ({ where }: { where: { id: string } }) => rows.get(where.id) ?? null,
+      async ({ where, include }: { where: { id: string }; include?: { _count?: unknown } }) => {
+        const row = rows.get(where.id);
+        if (!row) return null;
+        return include?._count
+          ? { ...row, _count: { classifications: classificationCounts.get(row.id) ?? 0 } }
+          : row;
+      },
     ),
     create: jest.fn(async ({ data }: { data: Omit<Row, "id" | "createdAt" | "updatedAt"> }) => {
       if (clash(data)) throw duplicate();
@@ -115,7 +125,7 @@ function makeDb() {
     { domain: "tiny.example.com", total: 3, marketing: 3, newsletter: 0 },
   ]);
 
-  return { rows, senderRule, normalizedEmail, parsedEmail, $queryRaw };
+  return { rows, classificationCounts, senderRule, normalizedEmail, parsedEmail, $queryRaw };
 }
 
 describe("SenderRulesController (HTTP)", () => {
@@ -353,6 +363,37 @@ describe("SenderRulesController (HTTP)", () => {
         .get(`/sender-rules/${created.body.rule.id}`)
         .expect(200);
       await request(app.getHttpServer()).get("/sender-rules/nope").expect(404);
+    });
+
+    it("GET /sender-rules/:id includes the linked classification count, unchanged by an edit", async () => {
+      const created = await post({
+        pattern: "kstgadgets.com",
+        matchType: "domain",
+        category: "marketing",
+      }).expect(201);
+      const id = created.body.rule.id;
+
+      const empty = await request(app.getHttpServer()).get(`/sender-rules/${id}`).expect(200);
+      expect(empty.body).toMatchObject({ id, pattern: "kstgadgets.com" });
+      expect(empty.body._count).toEqual({ classifications: 0 });
+
+      db.classificationCounts.set(id, 12);
+      await request(app.getHttpServer())
+        .patch(`/sender-rules/${id}`).set("X-Email-AI-Client", "test")
+        .send({ pattern: "kstgadgets.net", category: "newsletter" })
+        .expect(200);
+
+      const res = await request(app.getHttpServer()).get(`/sender-rules/${id}`).expect(200);
+      expect(res.body).toMatchObject({
+        id,
+        pattern: "kstgadgets.net",
+        category: "newsletter",
+        source: "manual",
+        createdAt: created.body.rule.createdAt,
+        _count: { classifications: 12 },
+      });
+      // The edit only updates the rule row; nothing touches classifications.
+      expect(db.senderRule.update).toHaveBeenCalledTimes(1);
     });
   });
 
