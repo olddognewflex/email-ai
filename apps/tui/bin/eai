@@ -23,8 +23,8 @@ if [ ! -f "$entry" ]; then
   ( cd "$tui_dir/../.." && pnpm --filter @email-ai/tui build >&2 )
 fi
 
-# API runs under launchd on PORT 3100 (see com.odnf.email-ai.api.plist).
-# Default the TUI to match; allow override from the caller's env.
-export PORT="${PORT:-3100}"
+# The TUI targets EAI_API_URL (default http://127.0.0.1:3100, the launchd
+# API). It deliberately ignores PORT, which dev shells often set to 3000.
+# For the dev API: EAI_API_URL=http://127.0.0.1:3000 eai
 
 exec node "$entry" "$@"

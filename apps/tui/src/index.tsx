@@ -8,7 +8,9 @@ Usage:
   eai <classificationId>   open the detail screen for one item
   eai --help               show this help
 Environment:
-  PORT   API port (default 3000, current target ${API_BASE})
+  EAI_API_URL
+         API base URL (default http://127.0.0.1:3100, the launchd API;
+         current target ${API_BASE}). PORT is ignored.
   EAI_BLOCK_ON_UNSUBSCRIBE
          u also blocks the sender's address (default on; 0/false/no/off
          only opens the link)
