@@ -411,6 +411,27 @@ after y/n). `G` shows suggestions. `c` opens a confirm panel for the
 selected family. The panel lists every rule to be created and, for each
 glob, the preview count and protected hits. `y` then creates the rules.
 
+`M` (list) opens **mailbox actions**: the `MailboxAction` audit log,
+newest first, with the kill switch shown in the header (writes enabled or
+disabled). Each row shows the status (colour-coded), the action, when,
+the sender, the subject, and the matching rule or the error/skip reason.
+`j`/`k` move, `f` cycles a status filter (all, succeeded, unknown,
+pending, failed, skipped, undone), and `r` refreshes.
+
+- `u` on a succeeded move to Trash asks "Move back to INBOX?" and, on `y`,
+  calls undo. API refusals are shown as returned: 403 writes disabled,
+  404 unknown action, 409 not a succeeded move or already undone, 502
+  not found in Trash.
+- `p` previews an apply run: totals plus a would-move count per rule and
+  account. It is **always a dry run**. The TUI has no way to send
+  `dryRun=false`; live moves come only from the hourly job.
+- `c` runs reconcile after a y/n confirm and shows the counts it returns.
+  Reconcile resolves only `pending`/`unknown` rows older than 10 minutes.
+  Undo and reconcile both need the kill switch on.
+
+Against an API that predates these endpoints, the screen says the API
+version doesn't support mailbox actions yet.
+
 #### Moving mail to Trash (`trash` rules)
 
 **Network exposure.** The API has no authentication. Three layers keep it

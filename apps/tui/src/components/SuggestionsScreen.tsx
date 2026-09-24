@@ -58,6 +58,9 @@ export function SuggestionsScreen({ onBack }: SuggestionsScreenProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Set synchronously so a burst of y (key repeat, paste) before the next
+  // render cannot create the family's rules twice.
+  const busyRef = useRef(false);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [done, setDone] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<{ text: string; isError: boolean } | null>(null);
@@ -109,6 +112,8 @@ export function SuggestionsScreen({ onBack }: SuggestionsScreenProps) {
     globsOf(c.family).every((p) => p in c.previews);
 
   const createFamily = async (family: SuggestionFamily) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setConfirming(null);
     setBusy(true);
     // Clear any earlier flash so "working…" shows while rules are created.
@@ -137,12 +142,15 @@ export function SuggestionsScreen({ onBack }: SuggestionsScreenProps) {
       }
     }
     setDone((d) => new Set(d).add(family.key));
+    busyRef.current = false;
     setBusy(false);
     flash(summarize(family.key, outcome), outcome.errors.length > 0);
   };
 
   useInput((input, key) => {
     if (confirming) {
+      // A repeated y after the first one dispatched must not fire again.
+      if (busyRef.current) return;
       if (input === "y" && previewsReady(confirming)) {
         void createFamily(confirming.family);
       } else if (input === "n" || key.escape) {
@@ -156,7 +164,7 @@ export function SuggestionsScreen({ onBack }: SuggestionsScreenProps) {
       return;
     }
     // Stay put while rules are being created: the result lands here.
-    if (busy) return;
+    if (busy || busyRef.current) return;
     if (input === "b" || key.escape) {
       onBack();
       return;

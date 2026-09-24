@@ -426,6 +426,204 @@ export function fetchSuggestions(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Mailbox actions (EMAIL-1). Mirrors packages/shared/src/schemas/
+// mailbox-actions.schemas.ts. The TUI can undo a move and run reconcile
+// (both refused by the API unless MAILBOX_WRITES_ENABLED=true), and preview
+// an apply run. It can never start a live apply: see applyRulesDryRun.
+// ---------------------------------------------------------------------------
+
+export type MailboxActionType = "move_to_trash" | "restore";
+
+export type MailboxActionStatus =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "undone"
+  | "unknown";
+
+/** A MailboxAction audit row as returned by GET /mailbox-actions. */
+export interface MailboxAction {
+  id: string;
+  action: MailboxActionType;
+  status: MailboxActionStatus;
+  accountId: string;
+  rawEmailId: string | null;
+  senderRuleId: string | null;
+  undoOfId: string | null;
+  sourceMailbox: string;
+  sourceUid: number;
+  sourceUidValidity: string | null;
+  destMailbox: string | null;
+  destUid: number | null;
+  destUidValidity: string | null;
+  messageId: string | null;
+  fromAddress: string | null;
+  subject: string | null;
+  gmailLabels: string[];
+  error: string | null;
+  undoneAt: string | null;
+  createdAt: string;
+  account: { label: string };
+}
+
+/** GET /mailbox-actions/status. */
+export interface MailboxWritesStatus {
+  writesEnabled: boolean;
+}
+
+/** POST /mailbox-actions/:id/undo. */
+export interface MailboxUndoResult {
+  original: Omit<MailboxAction, "account">;
+  restore: Omit<MailboxAction, "account">;
+}
+
+export interface SenderRuleApplyCounts {
+  /** Eligible mail matched by the rule(s), before `limit`. */
+  matched: number;
+  /** Of those, selected for this run: what a live run would try to move. */
+  selected: number;
+  moved: number;
+  skipped: number;
+  failed: number;
+  unknown: number;
+}
+
+export interface SenderRuleApplySample {
+  rawEmailId: string;
+  fromAddress: string | null;
+  subject: string | null;
+  outcome: "would_move" | "succeeded" | "failed" | "skipped" | "unknown";
+  error?: string | null;
+}
+
+export interface SenderRuleApplyAccount extends SenderRuleApplyCounts {
+  accountId: string;
+  accountLabel: string;
+  /** Account-level refusal (e.g. no MOVE, no \Trash, needs re-auth). */
+  error?: string | null;
+  sample: SenderRuleApplySample[];
+}
+
+export interface SenderRuleApplyRule {
+  ruleId: string;
+  pattern: string;
+  matchType: string;
+  byAccount: SenderRuleApplyAccount[];
+}
+
+/** POST /sender-rules/apply response. */
+export interface SenderRuleApplyResponse {
+  dryRun: boolean;
+  writesEnabled: boolean;
+  limit: number;
+  totals: SenderRuleApplyCounts;
+  byRule: SenderRuleApplyRule[];
+}
+
+export interface MailboxReconcileItem {
+  id: string;
+  action: MailboxActionType;
+  from: MailboxActionStatus;
+  /** New status, or null when left unresolved. */
+  to: MailboxActionStatus | null;
+  detail: string;
+}
+
+/** POST /mailbox-actions/reconcile response. */
+export interface MailboxReconcileResponse {
+  examined: number;
+  resolved: number;
+  unresolved: number;
+  accounts: { accountId: string; error: string | null; items: MailboxReconcileItem[] }[];
+}
+
+/** Shown when the running API predates the mailbox-actions endpoints. */
+export const MAILBOX_ACTIONS_UNSUPPORTED_MESSAGE =
+  "This API version doesn't support mailbox actions yet — update and restart it";
+
+/** Shown when the running API predates POST /sender-rules/apply. */
+export const APPLY_PREVIEW_UNSUPPORTED_MESSAGE =
+  "This API version doesn't support rule apply preview yet";
+
+/**
+ * Like withOldApiMessage, with a feature-specific wording. Only a missing
+ * route is rewritten: a 404 for an unknown action id stays verbatim.
+ */
+async function withMissingRouteMessage<T>(promise: Promise<T>, message: string): Promise<T> {
+  try {
+    return await promise;
+  } catch (err) {
+    if (isMissingRoute(err)) throw new ApiError(message, 404);
+    throw err;
+  }
+}
+
+function withMailboxActionsSupport<T>(promise: Promise<T>): Promise<T> {
+  return withMissingRouteMessage(promise, MAILBOX_ACTIONS_UNSUPPORTED_MESSAGE);
+}
+
+/** Kill-switch state. Config only on the API side: never opens IMAP. */
+export function fetchWriteStatus(): Promise<MailboxWritesStatus> {
+  return withMailboxActionsSupport(request<MailboxWritesStatus>("/mailbox-actions/status"));
+}
+
+/** Recent audit rows, newest first. Read-only. */
+export function fetchMailboxActions(params: {
+  limit: number;
+  accountId?: string;
+  status?: MailboxActionStatus;
+}): Promise<MailboxAction[]> {
+  const qs = new URLSearchParams({ limit: String(params.limit) });
+  if (params.accountId) qs.set("accountId", params.accountId);
+  if (params.status) qs.set("status", params.status);
+  return withMailboxActionsSupport(
+    request<MailboxAction[]>(`/mailbox-actions?${qs.toString()}`),
+  );
+}
+
+/**
+ * Move a trashed message back to INBOX. The API refuses with 403 (writes
+ * disabled), 404 (unknown id), 409 (not a succeeded move / already undone)
+ * or 502 (not found in Trash); the caller shows the message verbatim.
+ */
+export function undoMailboxAction(id: string): Promise<MailboxUndoResult> {
+  return withMailboxActionsSupport(
+    request<MailboxUndoResult>(`/mailbox-actions/${encodeURIComponent(id)}/undo`, {
+      method: "POST",
+    }),
+  );
+}
+
+/**
+ * Preview of POST /sender-rules/apply: always a DRY RUN. The TUI must never
+ * start a live apply, so `dryRun=true` is a literal in the path and this
+ * function deliberately takes no dryRun option — there is no parameter or
+ * code path that could send dryRun=false. Live moves run only from the
+ * hourly job (and only when the kill switch is on).
+ */
+export function applyRulesDryRun(params: { limit?: number } = {}): Promise<SenderRuleApplyResponse> {
+  const limit = params.limit !== undefined ? `&limit=${encodeURIComponent(String(params.limit))}` : "";
+  return withMissingRouteMessage(
+    request<SenderRuleApplyResponse>(`/sender-rules/apply?dryRun=true${limit}`, {
+      method: "POST",
+    }),
+    APPLY_PREVIEW_UNSUPPORTED_MESSAGE,
+  );
+}
+
+/**
+ * Resolve pending/unknown rows older than 10 minutes by looking the
+ * messages up in INBOX and Trash. Read-only on IMAP; needs the kill switch.
+ */
+export function reconcileMailboxActions(accountId?: string): Promise<MailboxReconcileResponse> {
+  const qs = accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
+  return withMailboxActionsSupport(
+    request<MailboxReconcileResponse>(`/mailbox-actions/reconcile${qs}`, { method: "POST" }),
+  );
+}
+
 /** Message text of any thrown value. */
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

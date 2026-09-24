@@ -100,7 +100,14 @@ final category" has to prefer `reviewDecision.correctedCategory` over
   `source: "tui"` and note `tui:block <classificationId>`. `R` (`RulesScreen`) toggles and
   deletes rules. `G` (`SuggestionsScreen`) reads `/sender-rules/suggestions`. It creates a
   family's proposed `classify` rules after a y/n confirm that lists every rule and previews
-  each glob. The TUI talks to whatever API
+  each glob. `M` (`MailboxActionsScreen`) lists the `MailboxAction` audit
+  log with the kill-switch state from `/mailbox-actions/status` in its
+  header. It filters by status (`f`), undoes a succeeded move to Trash
+  after a y/n confirm (`u`), and runs reconcile after a y/n confirm (`c`).
+  API refusals (403/404/409/502) are shown as returned. `p` previews
+  `/sender-rules/apply` as a dry run. `applyRulesDryRun()` hardcodes
+  `dryRun=true` and takes no dryRun option, so the TUI can never start a
+  live apply. The TUI talks to whatever API
   runs on its port. An API older than these endpoints returns a 404, which the TUI shows as
   a "does not support this yet" message instead of crashing.
 
