@@ -11,17 +11,24 @@ Environment:
   PORT   API port (default 3000, current target ${API_BASE})
 Keys (list):    j/k or arrows move · enter open · a approve · r reject
                 x block sender · s sync all accounts · q quit
-                R sender rules · G rule suggestions
+                R sender rules · G rule suggestions · M mailbox actions
 Keys (detail):  a approve · r reject (pick corrected category, esc cancels)
                 x block sender · n next pending · o open web view
                 j/k scroll body · b or esc back to list · q quit
 Keys (rules):   space enable/disable · d delete (y/n) · b back
 Keys (suggest): c create the family's rules (y/n) · b back
+Keys (actions): j/k move · u undo a move to Trash (y/n) · f filter by status
+                p preview apply (dry run only) · c reconcile (y/n)
+                r refresh · b back
 Block (x):      pick this address or this domain, then trash (default,
                 category delete) or classify with a category; shows how
                 much stored mail matches before you confirm. Rules only
-                pre-classify for now: trash rules will move mail to Trash
-                once mailbox writes are enabled.
+                pre-classify unless mailbox writes are enabled; then the
+                hourly job moves mail matching trash rules to Trash.
+Actions (M):    recent moves to Trash and restores, with the writes
+                enabled/disabled state. The TUI never starts a live apply:
+                p is always a dry run. Undo and reconcile need writes
+                enabled (MAILBOX_WRITES_ENABLED=true on the API).
 `;
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {

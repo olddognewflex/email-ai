@@ -47,6 +47,8 @@ export interface ListScreenProps {
   onOpenRules: () => void;
   /** G key — rule suggestions screen. */
   onOpenSuggestions: () => void;
+  /** M key — mailbox actions (audit log, undo, apply dry-run preview). */
+  onOpenMailboxActions: () => void;
 }
 
 function truncate(value: string, width: number): string {
@@ -67,6 +69,7 @@ export function ListScreen({
   onActed,
   onOpenRules,
   onOpenSuggestions,
+  onOpenMailboxActions,
 }: ListScreenProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -160,6 +163,10 @@ export function ListScreen({
         if (!busy) onOpenSuggestions();
         return;
       }
+      if (input === "M") {
+        if (!busy) onOpenMailboxActions();
+        return;
+      }
       if (loading || items.length === 0 || busy) return;
 
       const item = items[safeCursor];
@@ -230,7 +237,7 @@ export function ListScreen({
             : "Nothing pending review. All caught up."}
         </Text>
         <Text dimColor>
-          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · R rules · G suggestions · q quit
+          t {toggleLabel} · w {windowToggleLabel} · s sync all accounts · R rules · G suggestions · M actions · q quit
         </Text>
       </Box>
     );
@@ -349,7 +356,7 @@ export function ListScreen({
       ) : (
         <Text dimColor>
           j/k move · enter open · a approve · r reject · x block sender · o open web
-          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · R rules · G suggestions · q quit
+          {selectedItem?.email.unsubscribeLink ? " · u unsubscribe" : ""} · t {toggleLabel} · w {windowToggleLabel} · s sync · R rules · G suggestions · M actions · q quit
         </Text>
       )}
 

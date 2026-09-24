@@ -12,12 +12,14 @@ import { ListScreen } from "./ListScreen.js";
 import { DetailScreen } from "./DetailScreen.js";
 import { RulesScreen } from "./RulesScreen.js";
 import { SuggestionsScreen } from "./SuggestionsScreen.js";
+import { MailboxActionsScreen } from "./MailboxActionsScreen.js";
 
 type Mode =
   | { type: "list" }
   | { type: "detail"; id: string }
   | { type: "rules" }
   | { type: "suggestions" }
+  | { type: "mailboxActions" }
   | { type: "done" };
 
 export interface AppProps {
@@ -175,6 +177,10 @@ export function App({ initialId }: AppProps) {
     return <SuggestionsScreen onBack={handleBack} />;
   }
 
+  if (mode.type === "mailboxActions") {
+    return <MailboxActionsScreen onBack={handleBack} />;
+  }
+
   if (mode.type === "detail") {
     return (
       <DetailScreen
@@ -200,6 +206,7 @@ export function App({ initialId }: AppProps) {
       onActed={handleListActed}
       onOpenRules={() => setMode({ type: "rules" })}
       onOpenSuggestions={() => setMode({ type: "suggestions" })}
+      onOpenMailboxActions={() => setMode({ type: "mailboxActions" })}
     />
   );
 }

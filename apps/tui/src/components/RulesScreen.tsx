@@ -30,6 +30,9 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Set synchronously so a burst of y (key repeat, paste) before the next
+  // render cannot send a second delete.
+  const busyRef = useRef(false);
   const [confirmDelete, setConfirmDelete] = useState<SenderRule | null>(null);
   const [status, setStatus] = useState<{ text: string; isError: boolean } | null>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,6 +67,8 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
   const selected = list[safeCursor];
 
   const toggle = async (rule: SenderRule) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       const res = await updateRule(rule.id, { enabled: !rule.enabled });
@@ -72,11 +77,14 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
     } catch (err) {
       flash(errorMessage(err), true);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
   const remove = async (rule: SenderRule) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setConfirmDelete(null);
     setBusy(true);
     try {
@@ -86,12 +94,15 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
     } catch (err) {
       flash(errorMessage(err), true);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
   useInput((input, key) => {
     if (confirmDelete) {
+      // A repeated y after the first one dispatched must not fire again.
+      if (busyRef.current) return;
       if (input === "y") void remove(confirmDelete);
       else if (input === "n" || key.escape) {
         setConfirmDelete(null);
@@ -104,7 +115,7 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
       return;
     }
     // Stay put while a toggle or delete is in flight.
-    if (busy) return;
+    if (busy || busyRef.current) return;
     if (input === "b" || key.escape) {
       onBack();
       return;
