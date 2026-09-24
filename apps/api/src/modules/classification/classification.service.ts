@@ -71,12 +71,49 @@ export interface ProcessUnclassifiedResult {
   ruleClassified: number;
 }
 
-interface ClassificationAttempt {
+export interface ClassificationAttempt {
   output: EmailClassificationOutput;
   rawResponse: string | null;
   classificationError: string | null;
   providerUsed: string | null;
   senderRuleId?: string | null;
+}
+
+/**
+ * Sender-rule path: deterministic output from the matched rule. Still
+ * validated with EmailClassificationOutputSchema, so a stored rule with a
+ * category outside the enum fails loudly (ZodError) instead of writing a
+ * bad row. Shared with sender-rule reclassification, so a reclassified row
+ * is exactly what classification would have written.
+ */
+export function buildSenderRuleAttempt({
+  rule,
+  matchedOn,
+}: SenderRuleMatch<MatchableSenderRule>): ClassificationAttempt {
+  const output = EmailClassificationOutputSchema.parse({
+    category: rule.category,
+    importance: "low",
+    urgency: "none",
+    recommendedAction: senderRuleRecommendedAction(rule.category),
+    confidence: "high",
+    needsReview: false,
+    reason: `Sender rule ${rule.id}: ${rule.matchType} "${rule.pattern}"`.slice(
+      0,
+      500,
+    ),
+  });
+  return {
+    output,
+    rawResponse: JSON.stringify({
+      ruleId: rule.id,
+      matchType: rule.matchType,
+      pattern: rule.pattern,
+      matchedOn,
+    }),
+    classificationError: null,
+    providerUsed: SENDER_RULE_PROVIDER,
+    senderRuleId: rule.id,
+  };
 }
 
 @Injectable()
@@ -195,40 +232,11 @@ export class ClassificationService {
     }
   }
 
-  /**
-   * Sender-rule path: deterministic output from the matched rule. Still
-   * validated with EmailClassificationOutputSchema, so a stored rule with
-   * a category outside the enum fails loudly instead of writing a bad row.
-   */
-  private classifyWithRule({
-    rule,
-    matchedOn,
-  }: SenderRuleMatch<MatchableSenderRule>): ClassificationAttempt {
-    const output = EmailClassificationOutputSchema.parse({
-      category: rule.category,
-      importance: "low",
-      urgency: "none",
-      recommendedAction: senderRuleRecommendedAction(rule.category),
-      confidence: "high",
-      needsReview: false,
-      reason:
-        `Sender rule ${rule.id}: ${rule.matchType} "${rule.pattern}"`.slice(
-          0,
-          500,
-        ),
-    });
-    return {
-      output,
-      rawResponse: JSON.stringify({
-        ruleId: rule.id,
-        matchType: rule.matchType,
-        pattern: rule.pattern,
-        matchedOn,
-      }),
-      classificationError: null,
-      providerUsed: SENDER_RULE_PROVIDER,
-      senderRuleId: rule.id,
-    };
+  /** Sender-rule path: see `buildSenderRuleAttempt`. */
+  private classifyWithRule(
+    match: SenderRuleMatch<MatchableSenderRule>,
+  ): ClassificationAttempt {
+    return buildSenderRuleAttempt(match);
   }
 
   /**

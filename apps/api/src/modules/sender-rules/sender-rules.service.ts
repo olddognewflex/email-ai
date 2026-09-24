@@ -42,7 +42,8 @@ export interface SenderRulePreview {
   matchedEmails: number;
   /**
    * Of those, mail with no classification yet: the only mail a new rule
-   * would classify. Rules never reclassify already-classified mail.
+   * would classify. A classification run never reclassifies
+   * already-classified mail (POST /sender-rules/:id/reclassify does).
    */
   unclassifiedMatches: number;
   domains: { domain: string; count: number }[];
@@ -82,7 +83,8 @@ export class SenderRulesService {
 
   /**
    * One rule plus how many classifications link to it. Editing a rule
-   * never reclassifies that mail, so the TUI reports the count as
+   * does not reclassify that mail by itself (see
+   * POST /sender-rules/:id/reclassify), so the TUI reports the count as
    * "stay linked and unchanged" after an edit.
    */
   async get(id: string): Promise<SenderRuleWithCount> {
