@@ -55,8 +55,9 @@ Required:
   makes every stored IMAP password and refresh token undecryptable.
 
 Optional, schema-validated:
-- `PORT` — default `3000`. The launchd deployment, the `eai` TUI launcher and
-  `scripts/daily-digest.sh` assume `3100` (override the script with `EMAIL_AI_API_URL`).
+- `PORT` — default `3000`. The launchd deployment and `scripts/daily-digest.sh` assume
+  `3100` (override the script with `EMAIL_AI_API_URL`). The `eai` TUI ignores `PORT` and
+  uses `EAI_API_URL` (default `http://127.0.0.1:3100`).
 - `NODE_ENV` — `development` | `test` | `production`, default `development`.
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — required only for Gmail XOAUTH2 accounts;
   the app boots fine without them.
@@ -83,7 +84,7 @@ Optional, read directly from `process.env` (**not** in `envSchema`, so typos fai
   migration, regenerate the client, open Prisma Studio.
 - `pnpm lint` — **a stub.** Every package's lint script is `echo 'no linter configured yet'`.
 - `./scripts/daily-digest.sh [sync|digest|all]` — run the whole pipeline the way launchd does.
-- `eai` — the review TUI (`apps/tui`), defaulting to `PORT=3100`.
+- `eai` — the review TUI (`apps/tui`), targeting `EAI_API_URL` (default `http://127.0.0.1:3100`).
 
 ## Common Issues
 

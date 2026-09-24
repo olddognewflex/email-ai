@@ -496,6 +496,11 @@ curl 'localhost:3000/sender-rules/suggestions?minEmails=20&minShare=0.9'
 
 #### TUI keys
 
+`eai` talks to `EAI_API_URL` (default `http://127.0.0.1:3100`, the
+always-on launchd API). It ignores `PORT`, so a shell with `PORT=3000` set
+for the dev API doesn't redirect it. For the dev API:
+`EAI_API_URL=http://127.0.0.1:3000 eai`.
+
 In `eai`, `x` (list and detail) blocks the current sender: pick **this
 address** or **this domain**, then `trash` (default, category `delete`) or
 `classify` with a category. The prompt shows how much stored mail the rule

@@ -3,11 +3,11 @@
  * Node 22: global fetch is available.
  */
 
-const PORT = process.env.PORT ?? "3000";
-
-// 127.0.0.1, not "localhost": the API binds IPv4 loopback only, and
-// "localhost" may resolve to ::1 first.
-export const API_BASE = `http://127.0.0.1:${PORT}`;
+// Own variable, not the generic PORT: a shell that has PORT set for the
+// dev API (3000) would otherwise silently point the TUI there. Defaults to
+// the always-on launchd API. 127.0.0.1, not "localhost": the API binds
+// IPv4 loopback only, and "localhost" may resolve to ::1 first.
+export const API_BASE = (process.env.EAI_API_URL || "http://127.0.0.1:3100").replace(/\/+$/, "");
 
 /**
  * Sent on every request. The API requires it on write-capable endpoints

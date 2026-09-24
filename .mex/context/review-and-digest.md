@@ -91,8 +91,9 @@ final category" has to prefer `reviewDecision.correctedCategory` over
   `esc()` / `escAttr()` helpers. There is no template engine and no client framework. Email
   bodies are rendered into a sandboxed iframe `srcdoc`. Any new markup here must escape
   through those helpers — email content is attacker-controlled.
-- **`apps/tui`** — an Ink/React keyboard TUI launched by the `eai` shim, which defaults to
-  `PORT=3100` to match the launchd deployment while the app's own default is 3000.
+- **`apps/tui`** — an Ink/React keyboard TUI launched by the `eai` shim. It targets
+  `EAI_API_URL` (default `http://127.0.0.1:3100`, the launchd API) and ignores `PORT`, which
+  dev shells often set to 3000; use `EAI_API_URL=http://127.0.0.1:3000 eai` for the dev API.
   Besides review, it manages sender rules. `x` (`AddRulePrompt`) blocks the current sender
   by address or domain. The default is `trash`/`delete`; the alternative is `classify` with
   a category. It shows a `/sender-rules/preview` count first (only `y` confirms, after the
