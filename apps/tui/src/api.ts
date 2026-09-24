@@ -666,6 +666,144 @@ export function reconcileMailboxActions(accountId?: string): Promise<MailboxReco
   );
 }
 
+// ---------------------------------------------------------------------------
+// Reclassify existing mail for one rule (EMAIL-4). Mirrors the
+// SenderRuleReclassify* schemas in packages/shared/src/schemas/
+// sender-rules.schemas.ts. Database only: never touches a mailbox, but a
+// live run rewrites real classification rows (and may call the AI), so
+// previews and the live run are separate functions: reclassifyRule() can
+// only send dryRun=true, applyReclassify() is the one live call.
+// ---------------------------------------------------------------------------
+
+export type SenderRuleReclassifyScope = "linked" | "matching";
+export type SenderRuleReclassifyRelease = "reclassify" | "mark_review";
+export type ClassificationRevisionAction = "update" | "claim" | "release";
+
+export interface SenderRuleReclassifyParams {
+  scope: SenderRuleReclassifyScope;
+  /** API default: reclassify. */
+  release?: SenderRuleReclassifyRelease;
+  /** API default 500, max 5000. */
+  limit?: number;
+}
+
+export interface SenderRuleReclassifyCounts {
+  update: number;
+  claim: number;
+  release: number;
+  skippedReviewed: number;
+  unchanged: number;
+  /** Of `release`: classified again in this request. */
+  reclassified: number;
+  /** Of `release`: needed the AI but it was unavailable; kept and flagged for review. */
+  deferred: number;
+  /** Of `release` with release=mark_review: kept with needsReview. */
+  markedReview: number;
+  errors: number;
+}
+
+export interface SenderRuleReclassifySample {
+  normalizedEmailId: string;
+  fromAddress: string | null;
+  subject: string | null;
+  action: ClassificationRevisionAction;
+  from: { category: string; recommendedAction: string; providerUsed: string | null };
+  /** Null when not known: a released row still to be classified by the AI. */
+  to: { category: string; recommendedAction: string } | null;
+}
+
+/** POST /sender-rules/:id/reclassify response. */
+export interface SenderRuleReclassifyResponse {
+  dryRun: boolean;
+  scope: SenderRuleReclassifyScope;
+  release: SenderRuleReclassifyRelease;
+  limit: number;
+  /** Null on a dry run. */
+  batchId: string | null;
+  counts: SenderRuleReclassifyCounts;
+  /** AI classifications made (live) or expected (dry run). */
+  aiCalls: number;
+  /** Active AI provider type, or null when none is configured. */
+  aiProvider: string | null;
+  /** True when releases that needed the AI were flagged for review instead. */
+  aiUnavailable: boolean;
+  /** Estimate for `aiCalls`; null when the provider's cost is unknown. */
+  estimatedAiCostUsd: number | null;
+  /** True when changes remained beyond `limit`. */
+  more: boolean;
+  sample: SenderRuleReclassifySample[];
+}
+
+/** POST /sender-rules/reclassify-batches/:batchId/undo response. */
+export interface SenderRuleReclassifyUndoResponse {
+  batchId: string;
+  counts: {
+    restored: number;
+    /** Changed again since the batch; left as they are. */
+    conflicts: number;
+    /** Gained a ReviewDecision since the batch; left as they are. */
+    skippedReviewed: number;
+    /** Already undone by an earlier call. */
+    alreadyUndone: number;
+  };
+}
+
+/** Shown when the running API predates the reclassify endpoints. */
+export const RECLASSIFY_UNSUPPORTED_MESSAGE =
+  "This API version doesn't support reclassify yet";
+
+function reclassifyPath(id: string, dryRun: "true" | "false", params: SenderRuleReclassifyParams): string {
+  const qs = new URLSearchParams({ dryRun, scope: params.scope });
+  if (params.release !== undefined) qs.set("release", params.release);
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  return `/sender-rules/${encodeURIComponent(id)}/reclassify?${qs.toString()}`;
+}
+
+/**
+ * Preview: always a DRY RUN. `dryRun=true` is a literal and this function
+ * takes no dryRun option, so it can never change a classification.
+ */
+export function reclassifyRule(
+  id: string,
+  params: SenderRuleReclassifyParams,
+): Promise<SenderRuleReclassifyResponse> {
+  return withMissingRouteMessage(
+    request<SenderRuleReclassifyResponse>(reclassifyPath(id, "true", params), {
+      method: "POST",
+    }),
+    RECLASSIFY_UNSUPPORTED_MESSAGE,
+  );
+}
+
+/**
+ * The LIVE run (dryRun=false): rewrites classification rows and may call
+ * the AI provider for released rows. The only live reclassify call in the
+ * TUI; ReclassifyScreen calls it only after a y on a loaded dry run for
+ * the same scope and release (and a second y when AI calls are expected).
+ */
+export function applyReclassify(
+  id: string,
+  params: SenderRuleReclassifyParams,
+): Promise<SenderRuleReclassifyResponse> {
+  return withMissingRouteMessage(
+    request<SenderRuleReclassifyResponse>(reclassifyPath(id, "false", params), {
+      method: "POST",
+    }),
+    RECLASSIFY_UNSUPPORTED_MESSAGE,
+  );
+}
+
+/** Restore a batch's previous values; the API refuses rows changed or reviewed since. */
+export function undoReclassifyBatch(batchId: string): Promise<SenderRuleReclassifyUndoResponse> {
+  return withMissingRouteMessage(
+    request<SenderRuleReclassifyUndoResponse>(
+      `/sender-rules/reclassify-batches/${encodeURIComponent(batchId)}/undo`,
+      { method: "POST" },
+    ),
+    RECLASSIFY_UNSUPPORTED_MESSAGE,
+  );
+}
+
 /** Message text of any thrown value. */
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

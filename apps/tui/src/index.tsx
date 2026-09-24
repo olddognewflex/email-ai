@@ -20,7 +20,8 @@ Keys (detail):  a approve · r reject (pick corrected category, esc cancels)
                 x block sender · z undo block · u unsubscribe + block
                 n next pending · o open web view
                 j/k scroll body · b or esc back to list · q quit
-Keys (rules):   space enable/disable · e edit · d delete (y/n) · b back
+Keys (rules):   space enable/disable · e edit · d delete (y/n)
+                C reclassify existing mail for the rule · b back
 Keys (suggest): c create the family's rules (y/n) · b back
 Keys (actions): j/k move · u undo a move to Trash (y/n) · f filter by status
                 p preview apply (dry run only) · c reconcile (y/n)
@@ -39,7 +40,17 @@ Edit (e):       in R, edit the selected rule's pattern, match type,
                 changed. Shows the match preview when pattern or match
                 type changed, and a Trash warning with the saved rule's
                 dry-run count when the edit makes it move mail. Only y
-                saves (never Enter). Past classifications stay unchanged.
+                saves (never Enter). Past classifications stay unchanged
+                until you press C (offered after the save).
+Reclassify (C): in R, re-run the selected rule over mail that is already
+                classified. Opens with a dry run (scope linked): counts
+                and a sample of old → new categories. s toggles scope
+                (linked/matching), m the release mode (reclassify/
+                mark_review), r runs the dry run again. Only y applies
+                (never Enter), after the dry run for the current options
+                has loaded; if it expects AI calls, a second y confirms
+                the estimated cost. U undoes the batch this screen
+                applied (y/n). Classification rows only, never the mailbox.
 Undo (z):       y/n, then deletes the last rule this session created
                 (by x or u).
 Actions (M):    recent moves to Trash and restores, with the writes

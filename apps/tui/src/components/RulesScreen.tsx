@@ -8,6 +8,7 @@ import {
   type SenderRule,
 } from "../api.js";
 import { EditRulePrompt } from "./EditRulePrompt.js";
+import { ReclassifyScreen } from "./ReclassifyScreen.js";
 
 export interface RulesScreenProps {
   /** b/esc — back to the list. */
@@ -21,7 +22,8 @@ function truncate(value: string, width: number): string {
 
 /**
  * R key: every sender rule. space toggles enabled, e edits (EditRulePrompt),
- * d deletes after a y/n confirm. Nothing here touches a mailbox; trash
+ * d deletes after a y/n confirm, C reclassifies existing mail for the rule
+ * (ReclassifyScreen: dry run first). Nothing here touches a mailbox; trash
  * rules move mail only from the hourly job with mailbox writes enabled.
  */
 export function RulesScreen({ onBack }: RulesScreenProps) {
@@ -36,6 +38,7 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
   const busyRef = useRef(false);
   const [confirmDelete, setConfirmDelete] = useState<SenderRule | null>(null);
   const [editing, setEditing] = useState<SenderRule | null>(null);
+  const [reclassifying, setReclassifying] = useState<SenderRule | null>(null);
   const [status, setStatus] = useState<{ text: string; isError: boolean } | null>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -75,7 +78,7 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
     try {
       const res = await updateRule(rule.id, { enabled: !rule.enabled });
       setRules((rs) => (rs ?? []).map((r) => (r.id === rule.id ? res.rule : r)));
-      flash(`${res.rule.enabled ? "Enabled" : "Disabled"} ${res.rule.pattern}`);
+      flash(`${res.rule.enabled ? "Enabled" : "Disabled"} ${res.rule.pattern} · press C to reclassify existing mail for this rule`);
     } catch (err) {
       flash(errorMessage(err), true);
     } finally {
@@ -133,10 +136,12 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
         if (selected) setConfirmDelete(selected);
       } else if (input === "e") {
         if (selected) setEditing(selected);
+      } else if (input === "C") {
+        if (selected) setReclassifying(selected);
       }
     },
-    // The edit form owns the keyboard while it is open.
-    { isActive: !editing },
+    // The edit form and the reclassify screen own the keyboard while open.
+    { isActive: !editing && !reclassifying },
   );
 
   const columns = stdout?.columns ?? 80;
@@ -192,6 +197,14 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
             flash("Edit cancelled");
           }}
         />
+      </Box>
+    );
+  }
+
+  if (reclassifying) {
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        <ReclassifyScreen rule={reclassifying} onBack={() => setReclassifying(null)} />
       </Box>
     );
   }
@@ -273,7 +286,9 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
           Delete {confirmDelete.matchType} rule {confirmDelete.pattern}? y delete · n/esc keep
         </Text>
       ) : (
-        <Text dimColor>j/k move · space enable/disable · e edit · d delete · b back · q quit</Text>
+        <Text dimColor>
+          j/k move · space on/off · e edit · C reclassify · d delete · b back · q quit
+        </Text>
       )}
       {status ? (
         <Text color={status.isError ? "red" : "green"}>{status.text}</Text>

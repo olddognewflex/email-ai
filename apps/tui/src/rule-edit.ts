@@ -260,14 +260,35 @@ export function describeChanges(original: EditableRule, patch: RulePatch): strin
     .map((key) => `${key}: ${show(original[key])} → ${show(patch[key])}`);
 }
 
+/**
+ * A save that changed what the rule matches or what it writes (pattern,
+ * matchType, category, a switch to classify, or enabling/disabling it —
+ * a disabled rule wins nothing, so its rows become release candidates)
+ * can leave existing rows out of date, so the post-save message offers
+ * `C` (reclassify).
+ */
+export function offersReclassify(patch: RulePatch): boolean {
+  return (
+    patch.pattern !== undefined ||
+    patch.matchType !== undefined ||
+    patch.category !== undefined ||
+    patch.enabled !== undefined ||
+    patch.action === "classify"
+  );
+}
+
+export const RECLASSIFY_HINT = "Press C to reclassify existing mail for this rule";
+
 /** Flash text after a successful save. */
 export function saveSummary(
   pattern: string,
   warnings: string[],
   linkedCount: number | null,
+  offerReclassify = false,
 ): string {
   const parts = [`Saved ${pattern}`];
   if (linkedCount !== null) parts.push(linkedClassificationsText(linkedCount));
+  if (offerReclassify) parts.push(RECLASSIFY_HINT);
   parts.push(...warnings);
   return parts.join(" · ");
 }
