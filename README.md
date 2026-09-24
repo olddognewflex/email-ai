@@ -519,8 +519,8 @@ open fails, or the API returns an error, no rule is created. Set
 session by `x` or `u`: it asks "Remove rule <pattern>? y/n" and deletes
 it. Rules created in earlier sessions are removed from `R` instead.
 
-`R` lists rules (space enables/disables a rule, `e` edits it, `d`
-deletes it after y/n).
+`R` lists rules (space enables/disables a rule, `e` edits it, `C`
+reclassifies existing mail for it, `d` deletes it after y/n).
 
 `e` opens an edit form pre-filled with the selected rule: pattern and
 note are text fields, match type and action are pickers (left/right),
@@ -539,9 +539,37 @@ preview count is the edited rule's). Only `y` saves, once those counts
 have loaded; Enter never saves and `n`/esc go back to the form. A
 validation error appears under its field with your input kept; a
 duplicate says "A rule with this pattern already exists (see R)". Edits
-never reclassify mail: after a change to pattern, match type or
-category the TUI says how many existing classifications stay linked and
-unchanged (`GET /sender-rules/:id` includes `_count.classifications`). `G` shows suggestions. `c` opens a confirm panel for the
+never reclassify mail by themselves: after a change to pattern, match
+type or category the TUI says how many existing classifications stay
+linked and unchanged (`GET /sender-rules/:id` includes
+`_count.classifications`). After a change to pattern, match type,
+category, or a switch to `classify`, it also says "Press C to reclassify
+existing mail for this rule"; the edited rule stays selected.
+
+`C` on a rule opens the reclassify screen (see "Reclassifying existing
+mail" above). It starts with a **dry run** for `scope=linked` and shows
+the counts (update, claim, release, skipped because reviewed, unchanged,
+and deferred), the expected AI calls and estimated cost, the
+`aiUnavailable` notice, whether more remain beyond the limit (200 in the TUI, smaller than the
+API default of 500 so a run that calls the AI finishes within the HTTP
+client's timeout; run again to continue), and
+a sample of old → new categories with sender and subject. `s` toggles
+the scope (linked/matching) and `m` the release mode
+(reclassify/mark_review); each runs a new dry run, and `r` re-runs it.
+Only `y` applies (Enter never does), and only once the dry run for the
+current scope and release mode has loaded. If that dry run expects AI
+calls, the first `y` shows "N emails will be re-classified by
+<provider> (~$X)" and a second `y` applies; `n`/esc cancels. With
+nothing to change, `y` just says so. The live run can take a while when
+it calls the AI; keys wait until it finishes. The result shows the live
+counts, the batch id and, when the AI was unavailable, how many emails
+kept their classification and were flagged for review. `U` undoes that
+batch after y/n and shows restored, conflicts, skipped (reviewed) and
+already-undone counts. After an apply or undo, press `r` for a fresh dry
+run before applying again. Against an older API the screen says "This
+API version doesn't support reclassify yet".
+
+`G` shows suggestions. `c` opens a confirm panel for the
 selected family. The panel lists every rule to be created and, for each
 glob, the preview count and protected hits. `y` then creates the rules.
 

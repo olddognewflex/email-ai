@@ -30,6 +30,7 @@ import {
   mapValidationErrors,
   needsPreview,
   needsTrashWarning,
+  offersReclassify,
   reportsLinkedClassifications,
   saveSummary,
   summarizeDryRun,
@@ -190,7 +191,10 @@ export function EditRulePrompt({ rule, onSaved, onCancel }: EditRulePromptProps)
           // Count unavailable (older API): the save itself succeeded.
         }
       }
-      onSaved(res.rule, saveSummary(res.rule.pattern, res.warnings, linked));
+      onSaved(
+        res.rule,
+        saveSummary(res.rule.pattern, res.warnings, linked, offersReclassify(patch)),
+      );
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         backToForm({}, [DUPLICATE_RULE_MESSAGE]);
