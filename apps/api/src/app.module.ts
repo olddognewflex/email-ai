@@ -14,6 +14,7 @@ import { NormalizationModule } from "./modules/normalization/normalization.modul
 import { RulesEngineModule } from "./modules/rules-engine/rules-engine.module";
 import { ReviewQueueModule } from "./modules/review-queue/review-queue.module";
 import { SenderRulesModule } from "./modules/sender-rules/sender-rules.module";
+import { SenderRuleReclassifyModule } from "./modules/sender-rule-reclassify/sender-rule-reclassify.module";
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { SenderRulesModule } from "./modules/sender-rules/sender-rules.module";
     SenderRulesModule,
     MailboxActionsModule,
     ClassificationModule,
+    SenderRuleReclassifyModule,
     AiProviderModule,
     ReviewQueueModule,
     DigestModule,

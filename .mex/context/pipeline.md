@@ -167,6 +167,29 @@ compared against `rawEmail.internalDate`). Use `?since=YYYY-MM-DD` for a wider w
 `?all=true` for a full backfill. This is why `scripts/daily-digest.sh` passes
 `?since=<yesterday>` — the default cutoff would drop overnight mail.
 
+Rules classify only mail with no classification (the `classification: null` find-work set), so
+creating or editing a rule does not change existing rows. `POST /sender-rules/:id/reclassify`
+(module `sender-rule-reclassify`) is how an edited or new rule is applied to them, and it is
+a dry run unless `dryRun=false`. It uses the same precedence (a matcher compiled fresh from
+the database per run, not the `getMatcher()` cache) and the same `buildSenderRuleAttempt()`
+output as the classify stage. A pattern-only edit therefore counts still-matching rows as
+`update`, because `reason` and `rawResponse` name the pattern.
+- `scope=linked` updates the rule's own rows where it still wins and **releases** the rest.
+- `scope=matching` also **claims** rows from any provider that the rule now wins.
+- A released row is deleted and sent straight back through `classifyEmail` (rules, then AI).
+  A released email is never left unclassified. If the release needs the AI while the breaker
+  is open, or after 3 consecutive provider failures in the run, the row is kept and flagged
+  `needsReview`. A failure after the delete restores the previous values, flagged the same
+  way. Both count as `deferred` with `aiUnavailable: true`, and a later reclassify retries
+  them. Rule-covered releases are still reclassified while the breaker is open.
+- `release=mark_review` keeps the row and sets `needsReview` instead, with no AI call.
+
+Rows with a `ReviewDecision` are never touched. Every change writes a `ClassificationRevision`
+(previous and next values, `batchId`) in the same transaction, and
+`POST /sender-rules/reclassify-batches/:batchId/undo` restores a batch unless a row changed
+or was reviewed since. The review queue sees the new rows immediately. Past digest files are
+not rewritten; only today's and yesterday's are regenerated.
+
 `GET /sender-rules/suggestions` reads classification history and never writes. One raw
 `GROUP BY lower(senderDomain)` over `EmailClassification` ⋈ `NormalizedEmail` (filtered on
 `providerUsed`) feeds the pure `suggestSenderRules()` in `sender-rule-suggestions.ts`. It

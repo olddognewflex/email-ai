@@ -518,8 +518,9 @@ export type SenderRule = z.infer<typeof SenderRuleSchema>;
 
 /**
  * GET /sender-rules/:id: the rule plus how many classifications link to
- * it. Editing a rule never reclassifies that mail (rules only classify
- * unclassified mail), so these rows keep their category.
+ * it. Editing a rule does not reclassify that mail by itself (rules only
+ * classify unclassified mail), so these rows keep their category until
+ * POST /sender-rules/:id/reclassify is run.
  */
 export const SenderRuleDetailSchema = SenderRuleSchema.extend({
   _count: z.object({ classifications: z.number().int().nonnegative() }),
@@ -625,4 +626,165 @@ export const SenderRuleMatchResponseSchema = z.object({
 
 export type SenderRuleMatchResponse = z.infer<
   typeof SenderRuleMatchResponseSchema
+>;
+
+/** Default and ceiling for `limit` on POST /sender-rules/:id/reclassify. */
+export const SENDER_RULE_RECLASSIFY_DEFAULT_LIMIT = 500;
+export const SENDER_RULE_RECLASSIFY_MAX_LIMIT = 5000;
+
+/**
+ * Which classifications a reclassify run considers:
+ * - `linked`   rows this rule wrote (`senderRuleId = id`)
+ * - `matching` also rows from any provider whose sender this rule now wins
+ */
+export const SenderRuleReclassifyScopeSchema = z.enum(["linked", "matching"]);
+export type SenderRuleReclassifyScope = z.infer<
+  typeof SenderRuleReclassifyScopeSchema
+>;
+
+/**
+ * What happens to a linked row the rule no longer wins:
+ * - `reclassify`  delete the row and classify the email again now (rules
+ *                 first, then the active AI provider). When the AI is
+ *                 unavailable the row is kept, flagged for review, and
+ *                 counted as deferred; the email is never left unclassified
+ * - `mark_review` keep the row, set needsReview with a reason; no AI call
+ */
+export const SenderRuleReclassifyReleaseSchema = z.enum([
+  "reclassify",
+  "mark_review",
+]);
+export type SenderRuleReclassifyRelease = z.infer<
+  typeof SenderRuleReclassifyReleaseSchema
+>;
+
+/**
+ * POST /sender-rules/:id/reclassify query. `dryRun` is on unless it is
+ * exactly "false".
+ */
+export const SenderRuleReclassifyQuerySchema = z.object({
+  dryRun: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false"),
+  scope: SenderRuleReclassifyScopeSchema.default("linked"),
+  release: SenderRuleReclassifyReleaseSchema.default("reclassify"),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(SENDER_RULE_RECLASSIFY_MAX_LIMIT)
+    .default(SENDER_RULE_RECLASSIFY_DEFAULT_LIMIT),
+});
+export type SenderRuleReclassifyQuery = z.output<
+  typeof SenderRuleReclassifyQuerySchema
+>;
+
+/** Mirrors the Prisma ClassificationRevisionAction enum. */
+export const ClassificationRevisionActionSchema = z.enum([
+  "update",
+  "claim",
+  "release",
+]);
+export type ClassificationRevisionAction = z.infer<
+  typeof ClassificationRevisionActionSchema
+>;
+
+/** Mirrors the Prisma ClassificationRevisionStatus enum. */
+export const ClassificationRevisionStatusSchema = z.enum([
+  "applied",
+  "reclassified",
+  "deferred",
+  "marked_review",
+]);
+export type ClassificationRevisionStatus = z.infer<
+  typeof ClassificationRevisionStatusSchema
+>;
+
+export const SenderRuleReclassifyCountsSchema = z.object({
+  update: z.number().int().nonnegative(),
+  claim: z.number().int().nonnegative(),
+  release: z.number().int().nonnegative(),
+  skippedReviewed: z.number().int().nonnegative(),
+  unchanged: z.number().int().nonnegative(),
+  /** Of `release`: classified again in this request. */
+  reclassified: z.number().int().nonnegative(),
+  /**
+   * Of `release`: needed the AI provider but could not be AI-reclassified
+   * now (breaker open, repeated provider failures, or a failed call). The
+   * row is kept with its previous values and needsReview: true.
+   */
+  deferred: z.number().int().nonnegative(),
+  /** Of `release` with release=mark_review: kept with needsReview. */
+  markedReview: z.number().int().nonnegative(),
+  errors: z.number().int().nonnegative(),
+});
+export type SenderRuleReclassifyCounts = z.infer<
+  typeof SenderRuleReclassifyCountsSchema
+>;
+
+export const SenderRuleReclassifySampleSchema = z.object({
+  normalizedEmailId: z.string(),
+  fromAddress: z.string().nullable(),
+  subject: z.string().nullable(),
+  action: ClassificationRevisionActionSchema,
+  from: z.object({
+    category: z.string(),
+    recommendedAction: z.string(),
+    providerUsed: z.string().nullable(),
+  }),
+  /** Null when not known: a released row still to be (or not) classified by AI. */
+  to: z
+    .object({ category: z.string(), recommendedAction: z.string() })
+    .nullable(),
+});
+export type SenderRuleReclassifySample = z.infer<
+  typeof SenderRuleReclassifySampleSchema
+>;
+
+export const SenderRuleReclassifyResponseSchema = z.object({
+  dryRun: z.boolean(),
+  scope: SenderRuleReclassifyScopeSchema,
+  release: SenderRuleReclassifyReleaseSchema,
+  limit: z.number().int(),
+  /** Null on a dry run. Pass to POST /sender-rules/reclassify-batches/:batchId/undo. */
+  batchId: z.string().nullable(),
+  counts: SenderRuleReclassifyCountsSchema,
+  /**
+   * AI classifications: made (live run) or expected (dry run: released
+   * rows no other rule would classify).
+   */
+  aiCalls: z.number().int().nonnegative(),
+  /** Active AI provider type, or null when none is configured. */
+  aiProvider: z.string().nullable(),
+  /**
+   * True when some releases that needed the AI were flagged for review
+   * instead (breaker open, or repeated provider failures in this run).
+   */
+  aiUnavailable: z.boolean(),
+  /** Estimate for `aiCalls`; null when the provider's cost is unknown. */
+  estimatedAiCostUsd: z.number().nonnegative().nullable(),
+  /** True when changes remained beyond `limit`. */
+  more: z.boolean(),
+  sample: z.array(SenderRuleReclassifySampleSchema),
+});
+export type SenderRuleReclassifyResponse = z.infer<
+  typeof SenderRuleReclassifyResponseSchema
+>;
+
+/** POST /sender-rules/reclassify-batches/:batchId/undo response. */
+export const SenderRuleReclassifyUndoResponseSchema = z.object({
+  batchId: z.string(),
+  counts: z.object({
+    restored: z.number().int().nonnegative(),
+    /** Changed again since the batch; left as they are. */
+    conflicts: z.number().int().nonnegative(),
+    /** Gained a ReviewDecision since the batch; left as they are. */
+    skippedReviewed: z.number().int().nonnegative(),
+    /** Already undone by an earlier call. */
+    alreadyUndone: z.number().int().nonnegative(),
+  }),
+});
+export type SenderRuleReclassifyUndoResponse = z.infer<
+  typeof SenderRuleReclassifyUndoResponseSchema
 >;

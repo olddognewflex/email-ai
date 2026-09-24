@@ -106,6 +106,9 @@ Every non-GET request needs an `X-Email-AI-Client` header (any value), and the `
 |        |                                 | `?minEmails=20&minShare=0.9&provider=typesafe` |
 | POST   | /sender-rules/apply             | Apply enabled `trash` rules to INBOX. **Dry run unless `dryRun=false`** |
 |        |                                 | `?dryRun=true&ruleId=&accountId=&limit=200`; `dryRun=false` needs the kill switch (else 403) |
+| POST   | /sender-rules/:id/reclassify    | Re-run a rule over already-classified mail (DB only). **Dry run unless `dryRun=false`** |
+|        |                                 | `?dryRun=true&scope=linked\|matching&release=reclassify\|mark_review&limit=500` (max 5000); 404 unknown rule |
+| POST   | /sender-rules/reclassify-batches/:batchId/undo | Restore a reclassify batch → `{ batchId, counts: { restored, conflicts, skippedReviewed, alreadyUndone } }`; 404 unknown batch |
 | GET    | /mailbox-actions                | Mailbox-write audit log, newest first (`?limit=50&accountId=&status=`) |
 | GET    | /mailbox-actions/status         | `{ writesEnabled }` — kill-switch state (no IMAP)  |
 | POST   | /mailbox-actions/:id/undo       | Move a trashed message back to INBOX → `{ original, restore }` |
@@ -354,6 +357,98 @@ The API caches the compiled rules and refreshes the cache only when a rule
 is written through `/sender-rules`. After editing `SenderRule` rows
 directly in the database, restart the API. A classification run uses the
 rules as they were when it started.
+
+#### Reclassifying existing mail
+
+A rule only classifies mail that has no classification yet, so creating
+or editing a rule leaves existing rows as they were.
+`POST /sender-rules/:id/reclassify` re-runs one rule over mail that is
+already classified. It changes classification rows only and never
+touches the mailbox. It is a dry run unless you pass `dryRun=false`: the
+dry run writes nothing and returns the counts and a sample (up to 20
+rows, each with the old and new category).
+
+It uses the same matcher and precedence as classification, over enabled
+rules only. The rules are read fresh from the database on every run, so
+an edit made through the other API process (dev or launchd) is seen too.
+A disabled rule never wins, so all its linked rows are released and
+`scope=matching` claims nothing.
+
+- `scope=linked` (default) looks at the rows this rule wrote
+  (`senderRuleId = id`):
+  - **update**: the rule still wins for the sender and its output changed
+    (for example a new category). The row is rewritten with the rule's
+    current output. If nothing differs, the row is counted as `unchanged`.
+    The output includes `reason` and `rawResponse`, which name the
+    pattern, so an edit that only changes the pattern still counts
+    every row it still matches as `update`, with the category unchanged.
+  - **release**: the rule no longer matches, or another rule now wins.
+- `scope=matching` also **claims** already-classified mail from any
+  provider, TypeSafe included, whose sender this rule now wins. It never
+  claims rows another rule wins. A claimed row becomes a rule
+  classification (`providerUsed: "sender-rule"`, `senderRuleId`,
+  `needsReview: false`).
+
+What happens to released rows depends on `release`:
+
+- `release=reclassify` (default): the row is deleted and the email is
+  classified again in the same request, through the normal path (rules
+  first, then the active AI provider). `aiCalls` counts the AI
+  classifications, and `estimatedAiCostUsd` is about $0.0002 per email
+  on TypeSafe (`null` for a provider with no estimate). A dry run reports
+  the expected AI calls: released rows no other rule covers. A released
+  email is never left without a classification row:
+  - A release that another rule covers is reclassified by that rule
+    even while the AI breaker is open.
+  - A release that needs the AI is not deleted while the breaker is open,
+    or once three AI calls in a row have failed in this run. The row is
+    kept with its previous values and `needsReview: true`, with the reason
+    `Sender rule <id> no longer matches; AI unavailable, flagged for review
+    (reclassify <batchId>)`.
+  - If the AI call fails after the row was deleted, the previous values
+    are put back straight away (same id) with that same reason.
+
+  All three flagged cases count as `deferred`, and the response sets
+  `aiUnavailable: true`. The rows stay linked to the rule, so running the
+  reclassify again once the AI is back retries them. They also appear in
+  the review queue.
+- `release=mark_review`: the row is kept, with `needsReview: true` and
+  the reason `Sender rule <id> no longer matches (reclassify <batchId>)`.
+  No AI call is made.
+
+Rows with a `ReviewDecision` (approved, rejected or recategorized) are
+never changed and are counted as `skippedReviewed`. `limit` (default
+500, max 5000) caps the number of changes in one run, and `more: true`
+means some remain. Run it again to continue.
+
+```bash
+# Dry run: what would change for this rule?
+curl -X POST -H 'X-Email-AI-Client: me' \
+  'http://127.0.0.1:3000/sender-rules/<ruleId>/reclassify?scope=matching'
+# Apply it
+curl -X POST -H 'X-Email-AI-Client: me' \
+  'http://127.0.0.1:3000/sender-rules/<ruleId>/reclassify?scope=matching&dryRun=false'
+# Undo that run
+curl -X POST -H 'X-Email-AI-Client: me' \
+  'http://127.0.0.1:3000/sender-rules/reclassify-batches/<batchId>/undo'
+```
+
+**Audit and undo.** Each change in a live run writes one
+`ClassificationRevision` row (action `update`, `claim` or `release`),
+holding the previous values and the new ones. The revision is written
+in the same transaction as the change. All rows from one run share the
+`batchId` returned in the response.
+`POST /sender-rules/reclassify-batches/:batchId/undo` restores the
+previous values. It restores a row only if it is still exactly as the
+batch left it (or still unclassified, for a deferred release). Rows
+changed again since then count as `conflicts`, and rows that have
+gained a `ReviewDecision` count as `skippedReviewed`. Both are left as
+they are.
+
+The review queue and the actionable views read live rows, so changes
+show up there straight away. **Past digest files are not rewritten.**
+The hourly digest regenerates only today's and yesterday's files, so an
+older digest keeps the categories it was written with.
 
 #### Rule suggestions
 

@@ -232,6 +232,29 @@ separately and excludes `sender-rule` rows from `aiClassified`.
 A `trash` rule classifies exactly like a `classify` rule here. Nothing in
 this step touches a mailbox; the move-to-Trash path ships separately.
 
+### Reclassifying already-classified mail
+
+The pre-check only runs for mail with no classification. To apply a new
+or edited rule to rows that already exist, use
+`POST /sender-rules/:id/reclassify` (module `sender-rule-reclassify`; see
+the root README, "Reclassifying existing mail"). It builds rule rows with
+the same `buildSenderRuleAttempt` as this path, so an updated or claimed
+row is identical to what `classifyEmail` would write. It compiles a fresh
+matcher from the database per run instead of using `getMatcher()`'s
+per-process cache. A released row is deleted and passed back through
+`classifyEmail` with that matcher (rules first, then AI). A release that
+needs the AI is never stranded without a row:
+- While the breaker is open, or after 3 consecutive provider failures in
+  the run, the row is not deleted. It is kept, flagged `needsReview`.
+- If `classifyEmail` fails after the delete, the previous values are
+  restored, flagged `needsReview`.
+
+Both count as `deferred`. Each change is recorded in
+`ClassificationRevision` and can be undone per batch. Rows with a
+`ReviewDecision` are never changed; the row is locked
+(`SELECT … FOR UPDATE`) before that check. Past digest files are not
+rewritten.
+
 `processUnclassified` walks unclassified emails in a deterministic order
 (`rawEmail.internalDate` descending, then id), newest first. Emails that
 keep failing per-email write no row and stay unclassified; newest-first sinks
