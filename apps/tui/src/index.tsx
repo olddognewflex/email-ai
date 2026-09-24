@@ -9,11 +9,16 @@ Usage:
   eai --help               show this help
 Environment:
   PORT   API port (default 3000, current target ${API_BASE})
+  EAI_BLOCK_ON_UNSUBSCRIBE
+         u also blocks the sender's address (default on; 0/false/no/off
+         only opens the link)
 Keys (list):    j/k or arrows move · enter open · a approve · r reject
-                x block sender · s sync all accounts · q quit
+                x block sender · z undo block · u unsubscribe + block
+                s sync all accounts · q quit
                 R sender rules · G rule suggestions · M mailbox actions
 Keys (detail):  a approve · r reject (pick corrected category, esc cancels)
-                x block sender · n next pending · o open web view
+                x block sender · z undo block · u unsubscribe + block
+                n next pending · o open web view
                 j/k scroll body · b or esc back to list · q quit
 Keys (rules):   space enable/disable · d delete (y/n) · b back
 Keys (suggest): c create the family's rules (y/n) · b back
@@ -25,6 +30,12 @@ Block (x):      pick this address or this domain, then trash (default,
                 much stored mail matches before you confirm. Rules only
                 pre-classify unless mailbox writes are enabled; then the
                 hourly job moves mail matching trash rules to Trash.
+                Says so if an enabled rule already covers the sender.
+Unsubscribe (u): opens the link; once it opened, blocks this ADDRESS
+                (trash rule, never the domain) unless a rule already
+                covers the sender. EAI_BLOCK_ON_UNSUBSCRIBE=0 turns this off.
+Undo (z):       y/n, then deletes the last rule this session created
+                (by x or u).
 Actions (M):    recent moves to Trash and restores, with the writes
                 enabled/disabled state. The TUI never starts a live apply:
                 p is always a dry run. Undo and reconcile need writes

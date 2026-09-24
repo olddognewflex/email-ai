@@ -610,6 +610,73 @@ describe("SenderRulesController (HTTP)", () => {
     });
   });
 
+  describe("GET /sender-rules/match", () => {
+    const match = (qs: string) =>
+      request(app.getHttpServer()).get(`/sender-rules/match${qs}`);
+
+    it("is routed before :id and returns null when nothing covers the sender", async () => {
+      const res = await match("?address=a@promo.example.com&domain=promo.example.com").expect(200);
+      expect(res.body).toEqual({ rule: null, matchedOn: null });
+      expect(db.senderRule.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("prefers an address rule over a domain rule (classification precedence)", async () => {
+      await post({ pattern: "kstgadgets.com", matchType: "domain", category: "marketing" }).expect(201);
+      await post({ pattern: "Deals@KSTGadgets.com", matchType: "address", action: "trash" }).expect(201);
+
+      const res = await match("?address=deals@kstgadgets.com&domain=kstgadgets.com").expect(200);
+      expect(res.body.matchedOn).toBe("address");
+      expect(res.body.rule).toMatchObject({ pattern: "deals@kstgadgets.com", matchType: "address" });
+
+      const other = await match("?address=info@kstgadgets.com&domain=kstgadgets.com").expect(200);
+      expect(other.body.matchedOn).toBe("domain");
+      expect(other.body.rule).toMatchObject({ pattern: "kstgadgets.com", matchType: "domain" });
+    });
+
+    it("matches a domain-only query, and derives the domain from an address-only query", async () => {
+      await post({ pattern: "news.*.com", matchType: "glob", category: "marketing" }).expect(201);
+      const byDomain = await match("?domain=news.getthefinnewsnow.com").expect(200);
+      expect(byDomain.body).toMatchObject({ matchedOn: "domain", rule: { pattern: "news.*.com" } });
+      const byAddress = await match("?address=hi@news.getthefinnewsnow.com").expect(200);
+      expect(byAddress.body).toMatchObject({ matchedOn: "domain", rule: { pattern: "news.*.com" } });
+    });
+
+    it("ignores disabled rules", async () => {
+      const created = await post({
+        pattern: "deals@kstgadgets.com",
+        matchType: "address",
+        action: "trash",
+      }).expect(201);
+      await request(app.getHttpServer())
+        .patch(`/sender-rules/${created.body.rule.id}`).set("X-Email-AI-Client", "test")
+        .send({ enabled: false })
+        .expect(200);
+      const res = await match("?address=deals@kstgadgets.com&domain=kstgadgets.com").expect(200);
+      expect(res.body).toEqual({ rule: null, matchedOn: null });
+    });
+
+    it("rejects invalid queries with 400", async () => {
+      for (const qs of [
+        "",
+        "?address=",
+        "?address=not-an-address",
+        `?address=${"a".repeat(320)}@x.com`,
+        `?domain=${"a".repeat(254)}`,
+        "?address=a@x.com&address=b@x.com",
+      ]) {
+        await match(qs).expect(400);
+      }
+      expect(db.senderRule.findMany).not.toHaveBeenCalled();
+    });
+
+    it("never writes", async () => {
+      await match("?address=a@x.com").expect(200);
+      expect(db.senderRule.create).not.toHaveBeenCalled();
+      expect(db.senderRule.update).not.toHaveBeenCalled();
+      expect(db.senderRule.delete).not.toHaveBeenCalled();
+    });
+  });
+
   describe("getMatcher cache", () => {
     it("reuses the compiled matcher until a write invalidates it", async () => {
       const first = await service.getMatcher();

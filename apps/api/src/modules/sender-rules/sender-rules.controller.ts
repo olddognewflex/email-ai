@@ -12,6 +12,8 @@ import {
 import {
   CreateSenderRule,
   CreateSenderRuleSchema,
+  SenderRuleMatchQuery,
+  SenderRuleMatchQuerySchema,
   SenderRulePreviewRequest,
   SenderRulePreviewRequestSchema,
   SenderRuleSuggestionsQuery,
@@ -48,6 +50,15 @@ export class SenderRulesController {
     query: SenderRuleSuggestionsQuery,
   ) {
     return this.service.suggestions(query);
+  }
+
+  // Read-only. Declared before :id so "match" is never read as an id.
+  @Get("match")
+  match(
+    @Query(new ZodValidationPipe(SenderRuleMatchQuerySchema))
+    query: SenderRuleMatchQuery,
+  ) {
+    return this.service.match(query);
   }
 
   @Get(":id")

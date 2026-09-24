@@ -9,6 +9,7 @@ import { Prisma, SenderRule as SenderRuleRow } from "@prisma/client";
 import {
   CreateSenderRule,
   CreateSenderRuleSchema,
+  SenderRuleMatchQuery,
   SenderRulePreviewRequest,
   SenderRuleSuggestionsQuery,
   SenderRuleSuggestionsResponse,
@@ -359,6 +360,25 @@ export class SenderRulesService {
       this.matcherCache = loading;
     }
     return this.matcherCache;
+  }
+
+  /**
+   * Which enabled rule covers a sender, using the cached matcher (the same
+   * precedence as classification). Read-only. When only `address` is
+   * given, the domain is derived from it the way normalization does.
+   */
+  async match(
+    query: SenderRuleMatchQuery,
+  ): Promise<{ rule: SenderRuleRow | null; matchedOn: "address" | "domain" | null }> {
+    const matcher = await this.getMatcher();
+    const hit = matcher.match({
+      fromAddress: query.address ?? null,
+      senderDomain:
+        query.domain ?? (query.address ? domainOf(query.address) : null),
+    });
+    return hit
+      ? { rule: hit.rule, matchedOn: hit.matchedOn }
+      : { rule: null, matchedOn: null };
   }
 
   private invalidate(): void {

@@ -583,3 +583,35 @@ export const SenderRuleSuggestionsResponseSchema = z.object({
 export type SenderRuleSuggestionsResponse = z.infer<
   typeof SenderRuleSuggestionsResponseSchema
 >;
+
+/**
+ * Query for GET /sender-rules/match: which enabled rule (if any) covers a
+ * sender, with the same precedence classification uses. At least one of
+ * `address` / `domain` is required.
+ */
+export const SenderRuleMatchQuerySchema = z
+  .object({
+    address: z
+      .string()
+      .trim()
+      .min(1)
+      .max(SENDER_ADDRESS_MAX_LENGTH)
+      .regex(/^[^\s@]+@[^\s@]+$/, "address must look like an email address")
+      .optional(),
+    domain: z.string().trim().min(1).max(SENDER_DOMAIN_MAX_LENGTH).optional(),
+  })
+  .refine((value) => value.address !== undefined || value.domain !== undefined, {
+    message: "address or domain is required",
+    path: ["address"],
+  });
+
+export type SenderRuleMatchQuery = z.output<typeof SenderRuleMatchQuerySchema>;
+
+export const SenderRuleMatchResponseSchema = z.object({
+  rule: SenderRuleSchema.nullable(),
+  matchedOn: z.enum(["address", "domain"]).nullable(),
+});
+
+export type SenderRuleMatchResponse = z.infer<
+  typeof SenderRuleMatchResponseSchema
+>;
