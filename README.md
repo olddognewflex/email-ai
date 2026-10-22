@@ -95,6 +95,8 @@ Every non-GET request needs an `X-Email-AI-Client` header (any value), and the `
 |        |                                 | same `days` / `since` / `all` params           |
 | POST   | /review-queue/:id/approve       | Approve a classification                       |
 | POST   | /review-queue/:id/reject        | Reject a classification                        |
+| POST   | /review/auto-approve            | Auto-approve eligible rows waiting in the review queue (DB only). **Dry run unless `dryRun=false`** |
+|        |                                 | `?dryRun=true&limit=500` (max 5000); `dryRun=false` needs `AUTO_APPROVE_ENABLED=true` (else 409) |
 | GET    | /sender-rules                   | List sender rules                              |
 | GET    | /sender-rules/:id               | Get one sender rule with `_count.classifications` (404 if missing) |
 | POST   | /sender-rules                   | Create a rule → `{ rule, warnings }` (409 dup) |
@@ -416,8 +418,9 @@ What happens to released rows depends on `release`:
   the reason `Sender rule <id> no longer matches (reclassify <batchId>)`.
   No AI call is made.
 
-Rows with a `ReviewDecision` (approved, rejected or recategorized) are
-never changed and are counted as `skippedReviewed`. `limit` (default
+Rows with a human `ReviewDecision` (approved, rejected or recategorized)
+are never changed and are counted as `skippedReviewed`. An `auto`
+approval (see "Auto-approve") does not block a change; it is re-evaluated. `limit` (default
 500, max 5000) caps the number of changes in one run, and `more: true`
 means some remain. Run it again to continue.
 
@@ -442,7 +445,7 @@ in the same transaction as the change. All rows from one run share the
 previous values. It restores a row only if it is still exactly as the
 batch left it (or still unclassified, for a deferred release). Rows
 changed again since then count as `conflicts`, and rows that have
-gained a `ReviewDecision` count as `skippedReviewed`. Both are left as
+gained a human `ReviewDecision` count as `skippedReviewed`. Both are left as
 they are.
 
 The review queue and the actionable views read live rows, so changes
@@ -731,6 +734,7 @@ Response:
   "ruleClassified": 0,
   "fallbackClassified": 30,
   "needsReview": 15,
+  "autoApproved": 0,
   "byCategory": {
     "receipt": 45,
     "newsletter": 35,
@@ -739,6 +743,41 @@ Response:
     "unknown": 35
   }
 }
+```
+
+`autoApproved` counts classifications whose review decision was written by
+auto-approve (below), not by a person.
+
+### Auto-approve
+
+Most high-confidence mail left in the review queue is newsletters and
+marketing that TypeSafe's "sensitive" check flagged for review. Auto-approve
+clears that noise. It is off by default; set it in `apps/api/.env` and
+restart the API:
+
+- `AUTO_APPROVE_ENABLED`: on only when exactly `true`.
+- `AUTO_APPROVE_CATEGORIES`: comma-separated categories. Default
+  `newsletter,marketing,archive,receipt`. An invalid category, or `unknown`,
+  fails startup.
+
+When it is on, a classification whose category is on the list and whose
+confidence is `high` gets an approval with `source: auto` as it is written
+(AI path, sender-rule path, and sender-rule reclassify). `needsReview` is
+ignored on purpose. It only writes the `ReviewDecision` row and never
+touches the mailbox. A human approve, reject or recategorize replaces an
+`auto` decision, and auto never overwrites a human one. Reclassify skips
+only human decisions; it keeps an `auto` approval while the new values are
+still eligible and removes it otherwise, or when the row is flagged for
+review. The web UI and the TUI label these rows "auto-approved".
+
+Eligible rows already waiting in the review queue are approved with the
+backfill endpoint:
+
+```bash
+# Preview: counts by category and a sample (the default; works with the switch off)
+curl -X POST -H 'X-Email-AI-Client: me' 'http://127.0.0.1:3000/review/auto-approve'
+# Approve up to 500 (repeat while "more" is true)
+curl -X POST -H 'X-Email-AI-Client: me' 'http://127.0.0.1:3000/review/auto-approve?dryRun=false&limit=500'
 ```
 
 ### Fallback Behavior

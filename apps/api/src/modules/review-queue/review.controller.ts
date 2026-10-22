@@ -11,6 +11,7 @@ import {
 import { EmailCategorySchema } from "@email-ai/shared";
 import {
   ClassificationDetail,
+  ReviewQueueItem,
   ReviewQueueService,
 } from "./review-queue.service";
 import {
@@ -131,6 +132,7 @@ ${windowLine}
 <td>${esc(from)}</td>
 <td><code>${esc(item.classification.category)}</code></td>
 <td>${esc(item.classification.confidence)}</td>
+<td>${decisionBadge(item.reviewDecision)}</td>
 <td>${unsubscribe}</td>
 </tr>`;
       })
@@ -142,7 +144,7 @@ ${windowLine}
 ${windowLine}
 <p style="color: #888">${pagination.total} ${esc(labels.count)} (showing up to 50)</p>
 <table>
-<thead><tr><th>Account</th><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th></th></tr></thead>
+<thead><tr><th>Account</th><th>Subject</th><th>From</th><th>AI category</th><th>Confidence</th><th>Decision</th><th></th></tr></thead>
 <tbody>
 ${rows}
 </tbody>
@@ -220,7 +222,10 @@ ${link(`/review/actionable${query}`, "Actionable", active === "actionable")}
     const account = detail.email.accountLabel || "—";
 
     const decisionBanner = detail.reviewDecision
-      ? `<p style="padding: 0.5rem 1rem; background: #fff3cd; border: 1px solid #ffe69c; border-radius: 6px">
+      ? detail.reviewDecision.source === "auto"
+        ? `<p style="padding: 0.5rem 1rem; background: #e3f2fd; border: 1px solid #90caf9; border-radius: 6px">
+<strong>Auto-approved</strong> (high-confidence ${esc(detail.category)}) at ${esc(detail.reviewDecision.decidedAt.toLocaleString())}. Approve or reject to record your own decision.</p>`
+        : `<p style="padding: 0.5rem 1rem; background: #fff3cd; border: 1px solid #ffe69c; border-radius: 6px">
 Already decided: <strong>${esc(detail.reviewDecision.decision)}</strong>${
           detail.reviewDecision.correctedCategory
             ? ` → <code>${esc(detail.reviewDecision.correctedCategory)}</code>`
@@ -421,6 +426,8 @@ table.kv th { color: #888; font-weight: normal; padding-left: 0; }
 .btn.approve { border-color: #2e7d32; color: #2e7d32; }
 .btn.reject { border-color: #c62828; color: #c62828; }
 .btn.unsub { border-color: #1565c0; color: #1565c0; }
+.badge { font-size: 0.8rem; color: #555; }
+.badge.auto { color: #1565c0; }
 a.unsub { color: #1565c0; text-decoration: none; font-size: 0.85rem; }
 pre.body-text { white-space: pre-wrap; border: 1px solid #ccc; border-radius: 6px; padding: 1rem; background: #fafafa; }
 h1 { font-size: 1.3rem; }
@@ -460,6 +467,22 @@ function windowQuery(window: ReviewWindow): string {
 function withParams(path: string, params: string[]): string {
   if (params.length === 0) return path;
   return path + (path.includes("?") ? "&" : "?") + params.join("&");
+}
+
+/**
+ * Short decision label for the list views. Auto approvals are labelled
+ * distinctly from human decisions; undecided rows show nothing.
+ */
+function decisionBadge(
+  decision: ReviewQueueItem["reviewDecision"],
+): string {
+  if (!decision) return "";
+  if (decision.source === "auto") {
+    return `<span class="badge auto" title="Approved automatically (AUTO_APPROVE_CATEGORIES)">auto-approved</span>`;
+  }
+  return `<span class="badge">${esc(decision.decision)}${
+    decision.correctedCategory ? ` → ${esc(decision.correctedCategory)}` : ""
+  }</span>`;
 }
 
 /** Escape an untrusted string for interpolation into HTML markup. */

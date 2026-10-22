@@ -779,7 +779,7 @@ export const SenderRuleReclassifyUndoResponseSchema = z.object({
     restored: z.number().int().nonnegative(),
     /** Changed again since the batch; left as they are. */
     conflicts: z.number().int().nonnegative(),
-    /** Gained a ReviewDecision since the batch; left as they are. */
+    /** Gained a human ReviewDecision since the batch; left as they are. */
     skippedReviewed: z.number().int().nonnegative(),
     /** Already undone by an earlier call. */
     alreadyUndone: z.number().int().nonnegative(),

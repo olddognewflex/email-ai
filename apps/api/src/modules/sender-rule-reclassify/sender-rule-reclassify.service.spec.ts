@@ -16,6 +16,8 @@ import {
 import { ClassificationService } from "../classification/classification.service";
 import { SenderRulesService } from "../sender-rules/sender-rules.service";
 import { SenderRuleReclassifyController } from "./sender-rule-reclassify.controller";
+import { AutoApproveService } from "../review-queue/auto-approve.service";
+import { AppConfigService } from "../config/config.service";
 import {
   ClassificationSnapshot,
   SenderRuleReclassifyService,
@@ -156,11 +158,19 @@ const AI_OUTPUT = {
 
 // ---------------------------------------------------------------- fake db
 
-function matchesWhere(row: Record<string, unknown>, where: Record<string, unknown>, reviewed: Set<string>): boolean {
+type Source = "human" | "auto";
+
+function matchesWhere(row: Record<string, unknown>, where: Record<string, unknown>, reviewed: Map<string, Source>): boolean {
   for (const [key, value] of Object.entries(where)) {
     if (key === "reviewDecision") {
       const wantNone = (value as { is: null }).is === null;
       if (wantNone && reviewed.has(row.id as string)) return false;
+      continue;
+    }
+    if (key === "NOT") {
+      // Only form used: NOT { reviewDecision: { is: { source } } }.
+      const source = (value as { reviewDecision: { is: { source: Source } } }).reviewDecision.is.source;
+      if (reviewed.get(row.id as string) === source) return false;
       continue;
     }
     if (row[key] !== value) return false;
@@ -168,12 +178,24 @@ function matchesWhere(row: Record<string, unknown>, where: Record<string, unknow
   return true;
 }
 
-function makeDb(opts: { rules: Rule[]; emails: Email[]; rows: ClassRow[]; reviewed?: string[] }) {
+function makeDb(opts: {
+  rules: Rule[];
+  emails: Email[];
+  rows: ClassRow[];
+  /** Classification ids with a human decision. */
+  reviewed?: string[];
+  /** Classification ids with an `auto` approval. */
+  autoApproved?: string[];
+}) {
   const state = {
     rules: opts.rules,
     emails: new Map(opts.emails.map((e) => [e.id, e])),
     rows: new Map(opts.rows.map((r) => [r.id, { ...r }])),
-    reviewed: new Set(opts.reviewed ?? []),
+    // classificationId -> decision source
+    reviewed: new Map<string, Source>([
+      ...(opts.reviewed ?? []).map((id) => [id, "human"] as [string, Source]),
+      ...(opts.autoApproved ?? []).map((id) => [id, "auto"] as [string, Source]),
+    ]),
     revisions: [] as Revision[],
   };
   let seq = 0;
@@ -185,12 +207,30 @@ function makeDb(opts: { rules: Rule[]; emails: Email[]; rows: ClassRow[]; review
       throw f.error ? f.error() : new Error(`simulated ${op} failure`);
     }
   };
+  /** Undo log for decision writes inside the current transaction. */
+  const decisionUndo: { log: (() => void)[] | null } = { log: null };
+  const setDecision = (id: string, source: Source | undefined) => {
+    const before = state.reviewed.get(id);
+    if (source === undefined) state.reviewed.delete(id);
+    else state.reviewed.set(id, source);
+    decisionUndo.log?.push(() => {
+      if (before === undefined) state.reviewed.delete(id);
+      else state.reviewed.set(id, before);
+    });
+  };
   /** Runs when a row lock is taken (SELECT ... FOR UPDATE). */
   const onLock: { hook: ((id: string) => void) | null } = { hook: null };
   const byEmail = (emailId: string) =>
     [...state.rows.values()].find((r) => r.normalizedEmailId === emailId) ?? null;
   const withReview = (row: ClassRow | null) =>
-    row ? { ...row, reviewDecision: state.reviewed.has(row.id) ? { id: `rd-${row.id}` } : null } : null;
+    row
+      ? {
+          ...row,
+          reviewDecision: state.reviewed.has(row.id)
+            ? { id: `rd-${row.id}`, source: state.reviewed.get(row.id) }
+            : null,
+        }
+      : null;
 
   const db = {
     // Only used for SELECT ... FOR UPDATE row locks.
@@ -200,8 +240,28 @@ function makeDb(opts: { rules: Rule[]; emails: Email[]; rows: ClassRow[]; review
     }),
     reviewDecision: {
       findUnique: jest.fn(async ({ where }: { where: { classificationId: string } }) =>
-        state.reviewed.has(where.classificationId) ? { id: `rd-${where.classificationId}` } : null,
+        state.reviewed.has(where.classificationId)
+          ? { id: `rd-${where.classificationId}`, source: state.reviewed.get(where.classificationId) }
+          : null,
       ),
+      // AutoApproveService: insert-if-absent (skipDuplicates).
+      createMany: jest.fn(
+        async ({ data }: { data: { classificationId: string; source: Source }[]; skipDuplicates?: boolean }) => {
+          let count = 0;
+          for (const d of data) {
+            if (state.reviewed.has(d.classificationId)) continue;
+            setDecision(d.classificationId, d.source);
+            count++;
+          }
+          return { count };
+        },
+      ),
+      deleteMany: jest.fn(async ({ where }: { where: { classificationId: string; source?: Source } }) => {
+        const current = state.reviewed.get(where.classificationId);
+        if (current === undefined || (where.source && current !== where.source)) return { count: 0 };
+        setDecision(where.classificationId, undefined);
+        return { count: 1 };
+      }),
     },
     senderRule: {
       findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
@@ -276,6 +336,7 @@ function makeDb(opts: { rules: Rule[]; emails: Email[]; rows: ClassRow[]; review
         for (const r of [...state.rows.values()]) {
           if (matchesWhere(r, where, state.reviewed)) {
             state.rows.delete(r.id);
+            setDecision(r.id, undefined); // ON DELETE CASCADE
             count++;
           }
         }
@@ -340,17 +401,25 @@ function makeDb(opts: { rules: Rule[]; emails: Email[]; rows: ClassRow[]; review
       ),
     },
     // All-or-nothing, like Prisma's interactive transaction.
+    // (decisionUndo.log is cleared in finally below.)
     $transaction: jest.fn(async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
       const saved = {
         rows: new Map([...state.rows].map(([k, v]) => [k, { ...v }])),
         revisions: state.revisions.map((r) => ({ ...r })),
       };
+      // Decision writes made by this transaction are undone on rollback;
+      // a decision a test adds "concurrently" (hooks) is not.
+      const undo: (() => void)[] = [];
+      decisionUndo.log = undo;
       try {
         return await fn(db);
       } catch (error) {
         state.rows = saved.rows;
         state.revisions = saved.revisions;
+        for (const u of undo.reverse()) u();
         throw error;
+      } finally {
+        decisionUndo.log = null;
       }
     }),
   };
@@ -361,7 +430,14 @@ type Fixture = ReturnType<typeof makeDb>;
 
 async function makeService(
   fx: Fixture,
-  ai: { provider?: string | null; judge?: jest.Mock; breakerOpen?: boolean } = {},
+  ai: {
+    provider?: string | null;
+    judge?: jest.Mock;
+    breakerOpen?: boolean;
+    /** AUTO_APPROVE_ENABLED; off unless a test turns it on. */
+    autoApprove?: boolean;
+    autoApproveCategories?: string[];
+  } = {},
 ) {
   const judgeWith =
     ai.judge ?? jest.fn(async () => ({ output: AI_OUTPUT, rawResponse: '{"ai":true}' }));
@@ -379,6 +455,14 @@ async function makeService(
       ClassificationService,
       { provide: DatabaseService, useValue: fx.db },
       { provide: AiProviderService, useValue: aiProvider },
+      AutoApproveService,
+      {
+        provide: AppConfigService,
+        useValue: {
+          autoApproveEnabled: ai.autoApprove ?? false,
+          autoApproveCategories: ai.autoApproveCategories ?? ["newsletter", "marketing", "archive", "receipt"],
+        },
+      },
     ],
   }).compile();
   return {
@@ -579,7 +663,7 @@ describe("SenderRuleReclassifyService.reclassify", () => {
     // Review lands after the scan read c1.
     const realUpdate = fx.db.emailClassification.updateMany.getMockImplementation()!;
     fx.db.emailClassification.updateMany.mockImplementationOnce(async (args) => {
-      fx.state.reviewed.add("c1");
+      fx.state.reviewed.set("c1", "human");
       return realUpdate(args);
     });
 
@@ -764,14 +848,19 @@ describe("SenderRuleReclassifyService.reclassify", () => {
     const fx = editedRuleFixture();
     const { service } = await makeService(fx);
     fx.onLock.hook = (id) => {
-      if (id === "c1" || id === "c3") fx.state.reviewed.add(id);
+      if (id === "c1" || id === "c3") fx.state.reviewed.set(id, "human");
     };
 
     const res = await service.reclassify("r1", q());
     expect(res.counts).toMatchObject({ update: 0, release: 0, skippedReviewed: 2 });
     expect(fx.state.revisions).toHaveLength(0);
     expect(fx.state.rows.get("c3")).toBeDefined();
-    expect(fx.db.$queryRaw).toHaveBeenCalledTimes(2);
+    // Two rows, two locks each: the classification row (blocks new review
+    // inserts) and the decision row (blocks a human upsert over `auto`).
+    expect(fx.db.$queryRaw).toHaveBeenCalledTimes(4);
+    const sql = fx.db.$queryRaw.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?"));
+    expect(sql.filter((q) => q.includes('FROM "EmailClassification"') && q.includes("FOR UPDATE"))).toHaveLength(2);
+    expect(sql.filter((q) => q.includes('FROM "ReviewDecision"') && q.includes("FOR UPDATE"))).toHaveLength(2);
   });
 
   it("release=mark_review keeps the row, flags it for review, and makes no AI call", async () => {
@@ -909,7 +998,7 @@ describe("SenderRuleReclassifyService.undoBatch", () => {
 
     // c1 edited by hand since; c4 reviewed since; n3's new row changed.
     fx.state.rows.get("c1")!.category = "personal";
-    fx.state.reviewed.add("c4");
+    fx.state.reviewed.set("c4", "human");
     const n3 = [...fx.state.rows.values()].find((r) => r.normalizedEmailId === "n3")!;
     n3.needsReview = true;
 
@@ -958,6 +1047,124 @@ describe("SenderRuleReclassifyService.undoBatch", () => {
     const fx = editedRuleFixture();
     const { service } = await makeService(fx);
     await expect(service.undoBatch("missing")).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe("SenderRuleReclassifyService auto-approve (EMAIL-6)", () => {
+  /** editedRuleFixture with an `auto` approval on c1 (and optionally c3). */
+  function autoFixture(opts: { category?: string; autoApproved?: string[] } = {}) {
+    const r1 = rule("r1", "shop.example", { category: opts.category ?? "newsletter" });
+    const oldR1 = { ...r1, category: "marketing" };
+    return makeDb({
+      rules: [r1],
+      emails: [
+        email("n1", "deals@shop.example"),
+        email("n2", "news@shop.example"),
+        email("n3", "hello@old.example"),
+      ],
+      rows: [
+        ruleRow("c1", "n1", oldR1),
+        ruleRow("c2", "n2", r1),
+        ruleRow("c3", "n3", { ...r1, pattern: "old.example" }),
+      ],
+      autoApproved: opts.autoApproved ?? ["c1"],
+    });
+  }
+
+  it("an auto approval does not block a rule update, and is kept while still eligible", async () => {
+    const fx = autoFixture();
+    const { service } = await makeService(fx, { autoApprove: true });
+
+    const dry = await service.reclassify("r1", SenderRuleReclassifyQuerySchema.parse({}));
+    expect(dry.counts).toMatchObject({ update: 1, skippedReviewed: 0 });
+
+    const res = await service.reclassify("r1", q());
+    expect(res.counts).toMatchObject({ update: 1, skippedReviewed: 0 });
+    expect(fx.state.rows.get("c1")?.category).toBe("newsletter");
+    expect(fx.state.reviewed.get("c1")).toBe("auto");
+  });
+
+  it("removes the auto approval when the updated row is no longer eligible", async () => {
+    // Rule now writes `personal`, which is not on the auto-approve list.
+    const fx = autoFixture({ category: "personal" });
+    const { service } = await makeService(fx, { autoApprove: true });
+
+    const res = await service.reclassify("r1", q({ release: "mark_review" }));
+    expect(res.counts).toMatchObject({ update: 1, release: 1, skippedReviewed: 0 });
+    expect(fx.state.rows.get("c1")?.category).toBe("personal");
+    expect(fx.state.reviewed.has("c1")).toBe(false);
+  });
+
+  it("an eligible updated row gets an auto approval only when the switch is on", async () => {
+    const off = autoFixture({ autoApproved: [] });
+    await (await makeService(off)).service.reclassify("r1", q({ release: "mark_review" }));
+    expect(off.state.rows.get("c1")?.category).toBe("newsletter");
+    expect(off.state.reviewed.has("c1")).toBe(false);
+
+    const on = autoFixture({ autoApproved: [] });
+    await (await makeService(on, { autoApprove: true })).service.reclassify("r1", q({ release: "mark_review" }));
+    expect(on.state.reviewed.get("c1")).toBe("auto");
+  });
+
+  it("release=mark_review drops an auto approval so the row reaches the queue", async () => {
+    const fx = autoFixture({ autoApproved: ["c3"] });
+    const { service } = await makeService(fx, { autoApprove: true });
+
+    const res = await service.reclassify("r1", q({ release: "mark_review" }));
+    expect(res.counts).toMatchObject({ release: 1, markedReview: 1, skippedReviewed: 0 });
+    expect(fx.state.rows.get("c3")?.needsReview).toBe(true);
+    expect(fx.state.reviewed.has("c3")).toBe(false);
+  });
+
+  it("release=reclassify: the auto approval goes with the row; the new row is re-evaluated", async () => {
+    // AI answers `personal` / high: eligible only when personal is listed.
+    const notListed = autoFixture({ autoApproved: ["c3"] });
+    await (await makeService(notListed, { autoApprove: true })).service.reclassify("r1", q());
+    const n3a = [...notListed.state.rows.values()].find((r) => r.normalizedEmailId === "n3")!;
+    expect(n3a.category).toBe("personal");
+    expect(notListed.state.reviewed.has(n3a.id)).toBe(false);
+
+    const listed = autoFixture({ autoApproved: ["c3"] });
+    await (
+      await makeService(listed, { autoApprove: true, autoApproveCategories: ["personal"] })
+    ).service.reclassify("r1", q());
+    const n3b = [...listed.state.rows.values()].find((r) => r.normalizedEmailId === "n3")!;
+    expect(listed.state.reviewed.get(n3b.id)).toBe("auto");
+  });
+
+  it("still skips rows with a human decision", async () => {
+    const fx = autoFixture({ autoApproved: [] });
+    fx.state.reviewed.set("c1", "human");
+    const { service } = await makeService(fx, { autoApprove: true });
+
+    const res = await service.reclassify("r1", q({ release: "mark_review" }));
+    expect(res.counts).toMatchObject({ update: 0, skippedReviewed: 1 });
+    expect(fx.state.rows.get("c1")?.category).toBe("marketing");
+    expect(fx.state.reviewed.get("c1")).toBe("human");
+  });
+
+  it("undo re-evaluates an auto approval against the restored values", async () => {
+    const fx = autoFixture({ category: "personal" });
+    const { service } = await makeService(fx, { autoApprove: true });
+    const res = await service.reclassify("r1", q({ release: "mark_review" }));
+    expect(fx.state.reviewed.has("c1")).toBe(false);
+
+    const undo = await service.undoBatch(res.batchId!);
+    expect(undo.counts).toMatchObject({ restored: 2, skippedReviewed: 0 });
+    // Restored to marketing / high: eligible again.
+    expect(fx.state.rows.get("c1")?.category).toBe("marketing");
+    expect(fx.state.reviewed.get("c1")).toBe("auto");
+  });
+
+  it("a rolled-back write leaves the auto approval as it was", async () => {
+    const fx = autoFixture({ category: "personal" });
+    fx.failures.push({ op: "emailClassification.updateMany", left: 1 });
+    const { service } = await makeService(fx, { autoApprove: true });
+
+    const res = await service.reclassify("r1", q({ release: "mark_review" }));
+    expect(res.counts.errors).toBe(1);
+    expect(fx.state.rows.get("c1")?.category).toBe("marketing");
+    expect(fx.state.reviewed.get("c1")).toBe("auto");
   });
 });
 

@@ -341,4 +341,52 @@ describe("Review queue window query params", () => {
       expect(service.approveClassification).not.toHaveBeenCalled();
     });
   });
+  describe("decision source in the web UI (EMAIL-6)", () => {
+    it("labels an auto approval distinctly on the detail page", async () => {
+      service.getClassificationDetail.mockResolvedValue({
+        ...detail,
+        reviewDecision: {
+          decision: "approved",
+          source: "auto",
+          correctedCategory: null,
+          decidedAt: new Date(2026, 8, 21),
+        },
+      });
+      const res = await request(app.getHttpServer()).get("/review/c1").expect(200);
+      expect(res.text).toContain("Auto-approved");
+      expect(res.text).not.toContain("Already decided");
+    });
+
+    it("keeps the human banner for a human decision", async () => {
+      service.getClassificationDetail.mockResolvedValue({
+        ...detail,
+        reviewDecision: {
+          decision: "rejected",
+          source: "human",
+          correctedCategory: "personal",
+          decidedAt: new Date(2026, 8, 21),
+        },
+      });
+      const res = await request(app.getHttpServer()).get("/review/c1").expect(200);
+      expect(res.text).toContain("Already decided");
+      expect(res.text).not.toContain("Auto-approved");
+    });
+
+    it("shows auto-approved in the actionable list", async () => {
+      service.getActionableQueue.mockResolvedValue({
+        ...listResult(null, null),
+        items: [
+          {
+            ...item,
+            reviewDecision: { decision: "approved", source: "auto", correctedCategory: null },
+          },
+        ],
+        pagination: { page: 1, limit: 50, total: 1, totalPages: 1 },
+      });
+      const res = await request(app.getHttpServer())
+        .get("/review/actionable?all=true")
+        .expect(200);
+      expect(res.text).toContain("auto-approved");
+    });
+  });
 });

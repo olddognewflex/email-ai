@@ -146,3 +146,78 @@ describe("ReviewQueueService received-date window", () => {
     });
   });
 });
+
+describe("ReviewQueueService human decisions replace auto approvals (EMAIL-6)", () => {
+  function makeDecisionService(existing: { source: "human" | "auto" } | null) {
+    const created = (data: Record<string, unknown>) => ({
+      id: "rd1",
+      decidedAt: new Date(),
+      correctedCategory: null,
+      ...data,
+    });
+    const db = {
+      emailClassification: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "c1",
+          reviewDecision: existing ? { id: "rd0", decision: "approved", ...existing } : null,
+        }),
+      },
+      reviewDecision: {
+        delete: jest.fn().mockResolvedValue({}),
+        create: jest.fn(async ({ data }) => created(data)),
+        upsert: jest.fn(async ({ create }) => created(create)),
+      },
+    };
+    const service = new ReviewQueueService(db as unknown as DatabaseService);
+    return { service, db };
+  }
+
+  it("approve replaces an auto approval with a human one (single upsert)", async () => {
+    const { service, db } = makeDecisionService({ source: "auto" });
+    const res = await service.approveClassification("c1");
+    expect(db.reviewDecision.delete).not.toHaveBeenCalled();
+    expect(db.reviewDecision.create).not.toHaveBeenCalled();
+    const args = db.reviewDecision.upsert.mock.calls[0][0];
+    expect(args.where).toEqual({ classificationId: "c1" });
+    expect(args.update).toMatchObject({
+      decision: "approved",
+      correctedCategory: null,
+      source: "human",
+    });
+    expect(args.update.decidedAt).toBeInstanceOf(Date);
+    expect(args.create).toMatchObject({ classificationId: "c1", source: "human" });
+    expect(res.source).toBe("human");
+  });
+
+  it("reject replaces an auto approval with a human rejection", async () => {
+    const { service, db } = makeDecisionService({ source: "auto" });
+    await service.rejectClassification("c1", "personal");
+    expect(db.reviewDecision.delete).not.toHaveBeenCalled();
+    const args = db.reviewDecision.upsert.mock.calls[0][0];
+    expect(args.update).toMatchObject({
+      decision: "rejected",
+      correctedCategory: "personal",
+      source: "human",
+    });
+  });
+
+  it("recategorize overwrites an auto approval as human, re-timestamped", async () => {
+    const { service, db } = makeDecisionService({ source: "auto" });
+    await service.recategorizeClassification("c1", "personal");
+    const args = db.reviewDecision.upsert.mock.calls[0][0];
+    expect(args.create).toMatchObject({ source: "human", decision: "rejected" });
+    expect(args.update).toMatchObject({
+      source: "human",
+      decision: "rejected",
+      correctedCategory: "personal",
+    });
+    expect(args.update.decidedAt).toBeInstanceOf(Date);
+  });
+
+  it("an undecided row gets a human decision", async () => {
+    const { service, db } = makeDecisionService(null);
+    await service.approveClassification("c1");
+    expect(db.reviewDecision.delete).not.toHaveBeenCalled();
+    expect(db.reviewDecision.upsert.mock.calls[0][0].create.source).toBe("human");
+  });
+});

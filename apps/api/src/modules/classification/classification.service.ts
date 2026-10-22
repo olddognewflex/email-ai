@@ -24,6 +24,7 @@ import {
   isPerRequestFailure,
 } from "../ai-provider/ai-provider.error";
 import { SenderRulesService } from "../sender-rules/sender-rules.service";
+import { AutoApproveService } from "../review-queue/auto-approve.service";
 import type {
   MatchableSenderRule,
   SenderRuleMatch,
@@ -124,6 +125,7 @@ export class ClassificationService {
     private readonly db: DatabaseService,
     private readonly aiProviderService: AiProviderService,
     private readonly senderRulesService: SenderRulesService,
+    private readonly autoApprove: AutoApproveService,
   ) {}
 
   /**
@@ -179,7 +181,13 @@ export class ClassificationService {
     return this.persist(normalizedEmailId, attempt);
   }
 
-  private persist(
+  /**
+   * Writes the classification, then the EMAIL-6 auto-approval hook (AI
+   * and sender-rule rows alike). The hook only ever inserts an `auto`
+   * ReviewDecision when none exists; its failure is logged, never thrown:
+   * the classification is already stored and the row simply stays pending.
+   */
+  private async persist(
     normalizedEmailId: string,
     {
       output,
@@ -202,11 +210,21 @@ export class ClassificationService {
       providerUsed,
       senderRuleId,
     };
-    return this.db.emailClassification.upsert({
+    const row = await this.db.emailClassification.upsert({
       where: { normalizedEmailId },
       create: { normalizedEmailId, ...data },
       update: data,
     });
+    try {
+      await this.autoApprove.applyIfEligible(row);
+    } catch (error) {
+      this.logger.warn(
+        `Auto-approve failed for classification ${row.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return row;
   }
 
   /**
@@ -545,15 +563,20 @@ export class ClassificationService {
     ruleClassified: number;
     fallbackClassified: number;
     needsReview: number;
+    /** Classifications with an `auto` approval (EMAIL-6). */
+    autoApproved: number;
     byCategory: Record<string, number>;
   }> {
-    const allClassifications = await this.db.emailClassification.findMany({
-      select: {
-        providerUsed: true,
-        category: true,
-        needsReview: true,
-      },
-    });
+    const [allClassifications, autoApproved] = await Promise.all([
+      this.db.emailClassification.findMany({
+        select: {
+          providerUsed: true,
+          category: true,
+          needsReview: true,
+        },
+      }),
+      this.db.reviewDecision.count({ where: { source: "auto" } }),
+    ]);
 
     const stats = {
       total: allClassifications.length,
@@ -562,6 +585,7 @@ export class ClassificationService {
       ruleClassified: 0,
       fallbackClassified: 0,
       needsReview: 0,
+      autoApproved,
       byCategory: {} as Record<string, number>,
     };
 

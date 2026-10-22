@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { Prisma, SenderRule as SenderRuleRow } from "@prisma/client";
+import {
+  Prisma,
+  ReviewDecisionSource,
+  SenderRule as SenderRuleRow,
+} from "@prisma/client";
 import { ZodError, z } from "zod";
 import {
   ClassificationRevisionAction,
@@ -29,6 +33,7 @@ import {
   SenderRuleMatcher,
   compileRules,
 } from "../sender-rules/sender-rule-matcher";
+import { AutoApproveService } from "../review-queue/auto-approve.service";
 
 /** Classification rows read per page while scanning. */
 const SCAN_PAGE_SIZE = 500;
@@ -134,6 +139,18 @@ class StaleRowError extends Error {
 
 type Tx = Prisma.TransactionClient;
 
+/**
+ * Rows a reclassify (or undo) may still write: no decision, or only an
+ * `auto` approval (EMAIL-6). A human decision always locks the row.
+ */
+const NO_HUMAN_DECISION: Prisma.EmailClassificationWhereInput = {
+  NOT: { reviewDecision: { is: { source: ReviewDecisionSource.human } } },
+};
+
+function isHuman(review: { source: ReviewDecisionSource } | null | undefined): boolean {
+  return review?.source === ReviewDecisionSource.human;
+}
+
 function isPrismaError(error: unknown, ...codes: string[]): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -155,6 +172,7 @@ export class SenderRuleReclassifyService {
     private readonly db: DatabaseService,
     private readonly classification: ClassificationService,
     private readonly aiProvider: AiProviderService,
+    private readonly autoApprove: AutoApproveService,
   ) {}
 
   /**
@@ -306,7 +324,7 @@ export class SenderRuleReclassifyService {
           senderRuleId: true,
           rawResponse: true,
           classificationError: true,
-          reviewDecision: { select: { id: true } },
+          reviewDecision: { select: { id: true, source: true } },
           normalizedEmail: {
             select: {
               senderDomain: true,
@@ -329,8 +347,9 @@ export class SenderRuleReclassifyService {
         const wins = hit?.rule.id === rule.id;
         if (!linked && !wins) continue;
 
-        // Never override a human decision.
-        if (row.reviewDecision) {
+        // Never override a human decision. An `auto` approval does not
+        // block: it is re-evaluated when the row is written.
+        if (isHuman(row.reviewDecision)) {
           counts.skippedReviewed++;
           continue;
         }
@@ -447,7 +466,7 @@ export class SenderRuleReclassifyService {
           : (c.next as ClassificationSnapshot);
       try {
         await this.db.$transaction(async (tx) => {
-          await this.lockUnreviewed(tx, c.classificationId);
+          const existing = await this.lockUnreviewed(tx, c.classificationId);
           await tx.classificationRevision.create({
             data: this.revisionData(rule, c, batchId, {
               status: c.action === "release" ? "marked_review" : "applied",
@@ -455,6 +474,14 @@ export class SenderRuleReclassifyService {
             }),
           });
           await this.guardedUpdate(tx, c, next);
+          // A release here flags the row for review, so an `auto`
+          // approval must not keep it out of the queue.
+          await this.autoApprove.reconcile(
+            tx,
+            { id: c.classificationId, ...next },
+            existing,
+            { flagForReview: c.action === "release" },
+          );
         });
       } catch (error) {
         await this.countFailure(c, error, counts);
@@ -475,8 +502,10 @@ export class SenderRuleReclassifyService {
           data: this.revisionData(rule, c, batchId, { status: "deferred", next: null }),
         });
         const deleted = await tx.emailClassification.deleteMany({
-          where: { id: c.classificationId, ...c.previous, reviewDecision: { is: null } },
+          where: { id: c.classificationId, ...c.previous, ...NO_HUMAN_DECISION },
         });
+        // An `auto` approval goes with the row (FK cascade); the normal
+        // classification path below re-applies auto-approve if eligible.
         if (deleted.count !== 1) throw new StaleRowError();
         return revision.id;
       });
@@ -556,28 +585,46 @@ export class SenderRuleReclassifyService {
   }
 
   /**
-   * Locks the classification row for the rest of the transaction, then
-   * refuses it if it has a ReviewDecision. A concurrent review insert
-   * (FK check takes KEY SHARE on this row) waits for the lock, so a review
-   * cannot land between this check and the write.
+   * Locks the classification row and its decision row (if any) for the
+   * rest of the transaction, then refuses it if the decision is human.
+   * Returns the source of the decision the row has (`auto` or none).
+   *
+   * Both locks are needed so a human review cannot land between this
+   * check and the write:
+   * - A new decision (INSERT) waits on the classification lock, because
+   *   its FK check takes KEY SHARE on that row.
+   * - A human approve/reject/recategorize over an existing `auto`
+   *   decision is an upsert (ON CONFLICT DO UPDATE). It changes no FK
+   *   column and never touches the classification row, so it waits only
+   *   on the decision row lock.
    */
-  private async lockUnreviewed(tx: Tx, classificationId: string): Promise<void> {
+  private async lockUnreviewed(
+    tx: Tx,
+    classificationId: string,
+  ): Promise<ReviewDecisionSource | null> {
     await tx.$queryRaw`SELECT id FROM "EmailClassification" WHERE id = ${classificationId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT id FROM "ReviewDecision" WHERE "classificationId" = ${classificationId} FOR UPDATE`;
+    // Read after both locks: under READ COMMITTED this sees any human
+    // decision that committed while we waited.
     const review = await tx.reviewDecision.findUnique({
       where: { classificationId },
-      select: { id: true },
+      select: { id: true, source: true },
     });
-    if (review) throw new StaleRowError();
+    if (isHuman(review)) throw new StaleRowError();
+    return review?.source ?? null;
   }
 
-  /** Rewrites the row only if it is still exactly as scanned and unreviewed. */
+  /**
+   * Rewrites the row only if it is still exactly as scanned and has no
+   * human decision.
+   */
   private async guardedUpdate(
     tx: Tx,
     c: Candidate,
     next: ClassificationSnapshot,
   ): Promise<void> {
     const updated = await tx.emailClassification.updateMany({
-      where: { id: c.classificationId, ...c.previous, reviewDecision: { is: null } },
+      where: { id: c.classificationId, ...c.previous, ...NO_HUMAN_DECISION },
       data: next,
     });
     if (updated.count !== 1) throw new StaleRowError();
@@ -609,9 +656,9 @@ export class SenderRuleReclassifyService {
     if (error instanceof StaleRowError) {
       const now = await this.db.emailClassification.findUnique({
         where: { id: c.classificationId },
-        select: { reviewDecision: { select: { id: true } } },
+        select: { reviewDecision: { select: { id: true, source: true } } },
       });
-      if (now?.reviewDecision) {
+      if (isHuman(now?.reviewDecision)) {
         counts.skippedReviewed++;
         return;
       }
@@ -646,7 +693,8 @@ export class SenderRuleReclassifyService {
   /**
    * Restores a batch's previous values. A row is restored only if it is
    * still exactly what the batch left (or still unclassified, for a
-   * deferred release) and has no ReviewDecision.
+   * deferred release) and has no human ReviewDecision. An `auto` approval
+   * is re-evaluated against the restored values.
    */
   async undoBatch(batchId: string): Promise<SenderRuleReclassifyUndoResponse> {
     const revisions = await this.db.classificationRevision.findMany({
@@ -669,9 +717,9 @@ export class SenderRuleReclassifyService {
 
       const current = await this.db.emailClassification.findUnique({
         where: { normalizedEmailId: rev.normalizedEmailId },
-        include: { reviewDecision: { select: { id: true } } },
+        include: { reviewDecision: { select: { id: true, source: true } } },
       });
-      if (current?.reviewDecision) {
+      if (isHuman(current?.reviewDecision)) {
         counts.skippedReviewed++;
         continue;
       }
@@ -703,20 +751,22 @@ export class SenderRuleReclassifyService {
           });
           if (marked.count !== 1) throw new StaleRowError();
           if (current && expected) {
-            await this.lockUnreviewed(tx, current.id);
+            const existing = await this.lockUnreviewed(tx, current.id);
             const updated = await tx.emailClassification.updateMany({
-              where: { id: current.id, ...expected, reviewDecision: { is: null } },
+              where: { id: current.id, ...expected, ...NO_HUMAN_DECISION },
               data: restore,
             });
             if (updated.count !== 1) throw new StaleRowError();
+            await this.autoApprove.reconcile(tx, { id: current.id, ...restore }, existing);
           } else {
-            await tx.emailClassification.create({
+            const created = await tx.emailClassification.create({
               data: {
                 ...(rev.classificationId ? { id: rev.classificationId } : {}),
                 normalizedEmailId: rev.normalizedEmailId,
                 ...restore,
               },
             });
+            await this.autoApprove.reconcile(tx, created, null);
           }
         });
         counts.restored++;
