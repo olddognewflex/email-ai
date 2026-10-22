@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AiProviderModule } from "../ai-provider/ai-provider.module";
 import { ClassificationModule } from "../classification/classification.module";
+import { ReviewQueueModule } from "../review-queue/review-queue.module";
 import { SenderRuleReclassifyController } from "./sender-rule-reclassify.controller";
 import { SenderRuleReclassifyService } from "./sender-rule-reclassify.service";
 
@@ -10,7 +11,7 @@ import { SenderRuleReclassifyService } from "./sender-rule-reclassify.service";
  * imports SenderRulesModule (rules are read straight from the database).
  */
 @Module({
-  imports: [AiProviderModule, ClassificationModule],
+  imports: [AiProviderModule, ClassificationModule, ReviewQueueModule],
   controllers: [SenderRuleReclassifyController],
   providers: [SenderRuleReclassifyService],
 })

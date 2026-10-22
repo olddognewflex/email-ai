@@ -81,6 +81,8 @@ export interface ClassificationDetail {
   createdAt: string;
   reviewDecision: {
     decision: string;
+    /** `auto`: written by auto-approve (EMAIL-6). Absent on older API builds. */
+    source?: "human" | "auto";
     correctedCategory?: string | null;
     decidedAt?: string;
   } | null;
@@ -121,6 +123,7 @@ export interface DecisionResponse {
     id: string;
     classificationId: string;
     decision: string;
+    source?: "human" | "auto";
     decidedAt: string;
   };
   message?: string;
@@ -741,7 +744,7 @@ export interface SenderRuleReclassifyUndoResponse {
     restored: number;
     /** Changed again since the batch; left as they are. */
     conflicts: number;
-    /** Gained a ReviewDecision since the batch; left as they are. */
+    /** Gained a human ReviewDecision since the batch; left as they are. */
     skippedReviewed: number;
     /** Already undone by an earlier call. */
     alreadyUndone: number;
