@@ -20,6 +20,8 @@ type DecisionClient = Pick<Prisma.TransactionClient, "reviewDecision">;
 export const BACKFILL_DEFAULT_LIMIT = 500;
 export const BACKFILL_MAX_LIMIT = 5000;
 const BACKFILL_SAMPLE_SIZE = 20;
+/** Locking up to BACKFILL_MAX_LIMIT rows can outlast Prisma's 5s default. */
+const BACKFILL_TX_TIMEOUT_MS = 30_000;
 
 export interface AutoApproveBackfillSample {
   classificationId: string;
@@ -196,13 +198,30 @@ export class AutoApproveService {
 
     let approved = 0;
     if (!opts.dryRun && rows.length > 0) {
-      // Insert-if-absent: a decision made since the read above (human or
-      // auto) is left as it is and not counted.
-      const result = await this.db.reviewDecision.createMany({
-        data: rows.map((r) => autoApproval(r.id)),
-        skipDuplicates: true,
-      });
-      approved = result.count;
+      const ids = rows.map((r) => r.id);
+      approved = await this.db.$transaction(
+        async (tx) => {
+          // Lock the selected rows (classification first, as reclassify
+          // does), then re-read them: a row reclassified out of the list,
+          // decided, or deleted since the read above is skipped. While the
+          // locks are held no writer can change a row and no new decision
+          // can be inserted (its FK check needs KEY SHARE on the row).
+          await tx.$queryRaw`SELECT id FROM "EmailClassification" WHERE id IN (${Prisma.join(ids)}) ORDER BY id FOR UPDATE`;
+          const still = await tx.emailClassification.findMany({
+            where: { ...where, id: { in: ids } },
+            select: { id: true },
+          });
+          if (still.length === 0) return 0;
+          // Insert-if-absent as a second guard: an existing decision is
+          // left as it is and not counted.
+          const result = await tx.reviewDecision.createMany({
+            data: still.map((r) => autoApproval(r.id)),
+            skipDuplicates: true,
+          });
+          return result.count;
+        },
+        { timeout: BACKFILL_TX_TIMEOUT_MS },
+      );
       this.logger.log(
         `Auto-approve backfill: ${approved} approved of ${rows.length} selected ` +
           `(${eligible} eligible before the run)`,

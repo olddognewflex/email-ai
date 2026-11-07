@@ -40,7 +40,11 @@ function makeService(
       count: jest.fn().mockResolvedValue(0),
       findMany: jest.fn().mockResolvedValue([]),
     },
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    $transaction: jest.fn(),
   };
+  // Interactive transaction: the callback runs against the same mock.
+  db.$transaction.mockImplementation((fn: (tx: typeof db) => unknown) => fn(db));
   const config = {
     autoApproveEnabled: opts.enabled ?? true,
     autoApproveCategories: opts.categories ?? DEFAULT_CATEGORIES,
@@ -182,10 +186,25 @@ describe("AutoApproveService.backfill", () => {
     { id: "c3", category: "newsletter", normalizedEmail: { parsedEmail: null } },
   ];
 
-  function withRows(opts: Parameters<typeof makeService>[0] = {}, eligible = 5) {
+  /**
+   * `stillEligible`: the ids the locked re-read inside the write
+   * transaction still finds eligible (default: all of them).
+   */
+  function withRows(
+    opts: Parameters<typeof makeService>[0] = {},
+    eligible = 5,
+    stillEligible?: string[],
+  ) {
     const fx = makeService(opts);
     fx.db.emailClassification.count.mockResolvedValue(eligible);
-    fx.db.emailClassification.findMany.mockImplementation(async ({ take }: { take: number }) => rows.slice(0, take));
+    fx.db.emailClassification.findMany.mockImplementation(
+      async ({ take, where }: { take?: number; where: { id?: { in: string[] } } }) => {
+        if (!where.id) return rows.slice(0, take);
+        return where.id.in
+          .filter((id) => !stillEligible || stillEligible.includes(id))
+          .map((id) => ({ id }));
+      },
+    );
     return fx;
   }
 
@@ -222,6 +241,7 @@ describe("AutoApproveService.backfill", () => {
       { classificationId: "c3", category: "newsletter", subject: null, fromAddress: null },
     ]);
     expect(db.reviewDecision.createMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
   });
 
   it("real run: writes auto approvals insert-if-absent and counts only new ones", async () => {
@@ -235,6 +255,55 @@ describe("AutoApproveService.backfill", () => {
     expect(res).toMatchObject({ dryRun: false, approved: 2, selected: 3, more: false });
     expect(decisions.get("c2")).toBe("human");
     expect(decisions.get("c1")).toBe("auto");
+  });
+
+  it("real run: locks the selected rows, then re-reads them under the lock", async () => {
+    const { service, db } = withRows({}, 3);
+    const order: string[] = [];
+    db.$queryRaw.mockImplementation(async (sql: TemplateStringsArray) => {
+      order.push(sql.join("?"));
+      return [];
+    });
+    db.emailClassification.findMany.mockImplementation(async (args: { where: { id?: unknown } }) => {
+      if (!args.where.id) return rows;
+      order.push("re-read");
+      return rows.map(({ id }) => ({ id }));
+    });
+
+    await service.backfill({ dryRun: false, limit: 500 });
+
+    expect(db.$transaction).toHaveBeenCalledWith(expect.any(Function), { timeout: 30_000 });
+    expect(order[0]).toMatch(/FROM "EmailClassification" WHERE id IN \(\?\) ORDER BY id FOR UPDATE/);
+    expect(order[1]).toBe("re-read");
+    const reRead = db.emailClassification.findMany.mock.calls[1][0];
+    expect(reRead.where).toEqual({
+      needsReview: true,
+      reviewDecision: null,
+      confidence: "high",
+      category: { in: DEFAULT_CATEGORIES },
+      id: { in: ["c1", "c2", "c3"] },
+    });
+  });
+
+  it("real run: skips rows reclassified out of the list or deleted since selection", async () => {
+    // c2 was reclassified to an unlisted category, c3 was deleted: the
+    // locked re-read finds only c1.
+    const { service, db, decisions } = withRows({}, 3, ["c1"]);
+    const res = await service.backfill({ dryRun: false, limit: 500 });
+    expect(db.reviewDecision.createMany).toHaveBeenCalledWith({
+      data: [{ classificationId: "c1", decision: "approved", source: "auto" }],
+      skipDuplicates: true,
+    });
+    expect(res).toMatchObject({ approved: 1, selected: 3 });
+    expect(decisions.has("c2")).toBe(false);
+    expect(decisions.has("c3")).toBe(false);
+  });
+
+  it("real run: writes nothing when no selected row is still eligible", async () => {
+    const { service, db } = withRows({}, 3, []);
+    const res = await service.backfill({ dryRun: false, limit: 500 });
+    expect(db.reviewDecision.createMany).not.toHaveBeenCalled();
+    expect(res.approved).toBe(0);
   });
 
   it("respects limit and reports more", async () => {

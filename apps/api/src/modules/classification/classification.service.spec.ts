@@ -121,7 +121,11 @@ function makeService(
       createMany: jest.fn().mockResolvedValue({ count: 1 }),
       count: jest.fn().mockResolvedValue(0),
     },
+    $executeRaw: jest.fn().mockResolvedValue(0),
+    $transaction: jest.fn(),
   };
+  // Interactive transaction: the callback runs against the same mock.
+  db.$transaction.mockImplementation((fn: (tx: typeof db) => unknown) => fn(db));
   const ai = {
     getActiveProviderType: jest.fn().mockResolvedValue(providerType),
     judgeWith: jest
@@ -831,5 +835,50 @@ describe("ClassificationService — auto-approve at classification time (EMAIL-6
     const row = await service.classifyEmail("n1");
 
     expect(row).toMatchObject({ id: "c1", category: "receipt" });
+    expect(rawSql(db)).toEqual([
+      "SAVEPOINT auto_approve",
+      "ROLLBACK TO SAVEPOINT auto_approve",
+    ]);
+  });
+
+  it("writes the row and the approval in one transaction", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: true });
+    const order: string[] = [];
+    db.$transaction.mockImplementation(async (fn: (tx: typeof db) => unknown) => {
+      order.push("begin");
+      const out = await fn(db);
+      order.push("commit");
+      return out;
+    });
+    db.emailClassification.upsert.mockImplementation(async (args: { create: object }) => {
+      order.push("upsert");
+      return { id: "c1", ...args.create };
+    });
+    db.reviewDecision.createMany.mockImplementation(async () => {
+      order.push("approve");
+      return { count: 1 };
+    });
+
+    await service.classifyEmail("n1");
+
+    expect(order).toEqual(["begin", "upsert", "approve", "commit"]);
+    expect(rawSql(db)).toEqual([
+      "SAVEPOINT auto_approve",
+      "RELEASE SAVEPOINT auto_approve",
+    ]);
+  });
+
+  it("skips the savepoint when the row is not eligible", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: false });
+
+    await service.classifyEmail("n1");
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.$executeRaw).not.toHaveBeenCalled();
   });
 });
+
+/** The raw SQL statements run through the `$executeRaw` mock, in order. */
+function rawSql(db: { $executeRaw: jest.Mock }): string[] {
+  return db.$executeRaw.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?"));
+}

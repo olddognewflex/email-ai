@@ -182,10 +182,11 @@ export class ClassificationService {
   }
 
   /**
-   * Writes the classification, then the EMAIL-6 auto-approval hook (AI
-   * and sender-rule rows alike). The hook only ever inserts an `auto`
-   * ReviewDecision when none exists; its failure is logged, never thrown:
-   * the classification is already stored and the row simply stays pending.
+   * Writes the classification and runs the EMAIL-6 auto-approval hook (AI
+   * and sender-rule rows alike) in the same transaction. The hook only
+   * ever inserts an `auto` ReviewDecision when none exists; its failure is
+   * logged, never thrown: the classification is still stored and the row
+   * simply stays pending.
    */
   private async persist(
     normalizedEmailId: string,
@@ -210,21 +211,34 @@ export class ClassificationService {
       providerUsed,
       senderRuleId,
     };
-    const row = await this.db.emailClassification.upsert({
-      where: { normalizedEmailId },
-      create: { normalizedEmailId, ...data },
-      update: data,
+    // One transaction: the upsert holds the row lock until the approval is
+    // written, so a sender-rule reclassify or undo (which lock the row
+    // first) cannot change or flag the row in between and then be
+    // overridden by an approval made from this stale snapshot.
+    return this.db.$transaction(async (tx) => {
+      const row = await tx.emailClassification.upsert({
+        where: { normalizedEmailId },
+        create: { normalizedEmailId, ...data },
+        update: data,
+      });
+      if (this.autoApprove.enabled && this.autoApprove.isEligible(row)) {
+        // Best-effort: a failed approval rolls back to the savepoint and
+        // the classification still commits, pending review.
+        await tx.$executeRaw`SAVEPOINT auto_approve`;
+        try {
+          await this.autoApprove.applyIfEligible(row, tx);
+          await tx.$executeRaw`RELEASE SAVEPOINT auto_approve`;
+        } catch (error) {
+          await tx.$executeRaw`ROLLBACK TO SAVEPOINT auto_approve`;
+          this.logger.warn(
+            `Auto-approve failed for classification ${row.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      return row;
     });
-    try {
-      await this.autoApprove.applyIfEligible(row);
-    } catch (error) {
-      this.logger.warn(
-        `Auto-approve failed for classification ${row.id}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    return row;
   }
 
   /**

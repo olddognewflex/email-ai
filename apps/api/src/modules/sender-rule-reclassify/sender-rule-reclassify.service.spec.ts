@@ -238,6 +238,8 @@ function makeDb(opts: {
       onLock.hook?.(values[0] as string);
       return [];
     }),
+    // Only used for the auto-approve SAVEPOINT in ClassificationService.persist.
+    $executeRaw: jest.fn(async () => 0),
     reviewDecision: {
       findUnique: jest.fn(async ({ where }: { where: { classificationId: string } }) =>
         state.reviewed.has(where.classificationId)
