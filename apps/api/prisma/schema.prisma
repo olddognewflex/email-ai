@@ -295,16 +295,21 @@ model ClassificationRevision {
 }
 
 model ReviewDecision {
-  id                String             @id @default(cuid())
-  classificationId  String             @unique
+  id                String               @id @default(cuid())
+  classificationId  String               @unique
   decision          ReviewDecisionType
   correctedCategory String?
-  decidedAt         DateTime           @default(now())
+  decidedAt         DateTime             @default(now())
+  /// Who made the decision. `auto` rows come from AUTO_APPROVE_* (EMAIL-6)
+  /// and are always replaced by a human decision; auto never overwrites
+  /// a `human` one.
+  source            ReviewDecisionSource @default(human)
 
   classification EmailClassification @relation(fields: [classificationId], references: [id], onDelete: Cascade)
 
   @@index([decision])
   @@index([decidedAt])
+  @@index([source])
 }
 
 model AiProviderConfig {
@@ -349,6 +354,11 @@ model EmailMessage {
 enum ReviewDecisionType {
   approved
   rejected
+}
+
+enum ReviewDecisionSource {
+  human
+  auto
 }
 
 enum SyncStatus {

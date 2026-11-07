@@ -250,9 +250,11 @@ needs the AI is never stranded without a row:
   restored, flagged `needsReview`.
 
 Both count as `deferred`. Each change is recorded in
-`ClassificationRevision` and can be undone per batch. Rows with a
+`ClassificationRevision` and can be undone per batch. Rows with a human
 `ReviewDecision` are never changed; the row is locked
-(`SELECT … FOR UPDATE`) before that check. Past digest files are not
+(`SELECT … FOR UPDATE`) before that check. An `auto` approval (EMAIL-6)
+is re-evaluated in the same transaction: kept while still eligible,
+removed otherwise or when the row is flagged for review. Past digest files are not
 rewritten.
 
 `processUnclassified` walks unclassified emails in a deterministic order

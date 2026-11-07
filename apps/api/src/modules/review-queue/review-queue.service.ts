@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { convert } from "html-to-text";
 import { DatabaseService } from "../database/database.service";
-import { ReviewDecisionType } from "@prisma/client";
+import { ReviewDecisionSource, ReviewDecisionType } from "@prisma/client";
 import { defaultReviewWindow, ReviewWindow } from "./review-window";
 
 export interface ReviewQueueItem {
@@ -16,6 +16,15 @@ export interface ReviewQueueItem {
     reason: string;
     createdAt: Date;
   };
+  /**
+   * The row's decision, if any. Always null in the review queue (which
+   * lists undecided rows); the actionable list shows decided rows too.
+   */
+  reviewDecision: {
+    decision: ReviewDecisionType;
+    source: ReviewDecisionSource;
+    correctedCategory: string | null;
+  } | null;
   email: {
     id: string;
     subject: string | null;
@@ -50,6 +59,7 @@ export interface ReviewDecisionResponse {
   id: string;
   classificationId: string;
   decision: ReviewDecisionType;
+  source: ReviewDecisionSource;
   decidedAt: Date;
   correctedCategory?: string | null;
 }
@@ -67,6 +77,8 @@ export interface ClassificationDetail {
   createdAt: Date;
   reviewDecision: {
     decision: ReviewDecisionType;
+    /** `auto`: written by auto-approve (EMAIL-6), not by a person. */
+    source: ReviewDecisionSource;
     correctedCategory: string | null;
     decidedAt: Date;
   } | null;
@@ -188,6 +200,9 @@ export class ReviewQueueService {
       this.db.emailClassification.findMany({
         where,
         include: {
+          reviewDecision: {
+            select: { decision: true, source: true, correctedCategory: true },
+          },
           normalizedEmail: {
             include: {
               parsedEmail: {
@@ -230,6 +245,7 @@ export class ReviewQueueService {
           reason: classification.reason,
           createdAt: classification.createdAt,
         },
+        reviewDecision: classification.reviewDecision ?? null,
         email: {
           id: normalizedEmail?.id || "",
           subject: parsedEmail?.subject || null,
@@ -325,6 +341,7 @@ export class ReviewQueueService {
       reviewDecision: classification.reviewDecision
         ? {
             decision: classification.reviewDecision.decision,
+            source: classification.reviewDecision.source,
             correctedCategory: classification.reviewDecision.correctedCategory,
             decidedAt: classification.reviewDecision.decidedAt,
           }
@@ -381,20 +398,25 @@ export class ReviewQueueService {
       );
     }
 
+    // Any earlier decision is replaced, including an `auto` approval: a
+    // human decision always wins. Upsert, so an auto approval written
+    // concurrently can't make this fail on the unique classificationId.
     if (classification.reviewDecision) {
       this.logger.warn(
-        `Classification ${classificationId} already has a review decision. Updating to approved.`,
+        `Classification ${classificationId} already has a ${classification.reviewDecision.source} review decision. Updating to approved.`,
       );
-      await this.db.reviewDecision.delete({
-        where: { classificationId },
-      });
     }
 
-    const decision = await this.db.reviewDecision.create({
-      data: {
-        classificationId,
-        decision: ReviewDecisionType.approved,
-      },
+    const fields = {
+      decision: ReviewDecisionType.approved,
+      correctedCategory: null,
+      source: ReviewDecisionSource.human,
+      decidedAt: new Date(),
+    };
+    const decision = await this.db.reviewDecision.upsert({
+      where: { classificationId },
+      create: { classificationId, ...fields },
+      update: fields,
     });
 
     this.logger.log(`Approved classification ${classificationId}`);
@@ -403,6 +425,7 @@ export class ReviewQueueService {
       id: decision.id,
       classificationId: decision.classificationId,
       decision: decision.decision,
+      source: decision.source,
       decidedAt: decision.decidedAt,
     };
   }
@@ -428,19 +451,20 @@ export class ReviewQueueService {
 
     if (classification.reviewDecision) {
       this.logger.warn(
-        `Classification ${classificationId} already has a review decision. Updating to rejected.`,
+        `Classification ${classificationId} already has a ${classification.reviewDecision.source} review decision. Updating to rejected.`,
       );
-      await this.db.reviewDecision.delete({
-        where: { classificationId },
-      });
     }
 
-    const decision = await this.db.reviewDecision.create({
-      data: {
-        classificationId,
-        decision: ReviewDecisionType.rejected,
-        correctedCategory,
-      },
+    const fields = {
+      decision: ReviewDecisionType.rejected,
+      correctedCategory: correctedCategory ?? null,
+      source: ReviewDecisionSource.human,
+      decidedAt: new Date(),
+    };
+    const decision = await this.db.reviewDecision.upsert({
+      where: { classificationId },
+      create: { classificationId, ...fields },
+      update: fields,
     });
 
     this.logger.log(
@@ -452,6 +476,7 @@ export class ReviewQueueService {
       id: decision.id,
       classificationId: decision.classificationId,
       decision: decision.decision,
+      source: decision.source,
       decidedAt: decision.decidedAt,
       correctedCategory: decision.correctedCategory,
     };
@@ -483,10 +508,15 @@ export class ReviewQueueService {
         classificationId,
         decision: ReviewDecisionType.rejected,
         correctedCategory,
+        source: ReviewDecisionSource.human,
       },
+      // Replaces any earlier decision, including an `auto` approval: the
+      // human one wins and is timestamped now.
       update: {
         decision: ReviewDecisionType.rejected,
         correctedCategory,
+        source: ReviewDecisionSource.human,
+        decidedAt: new Date(),
       },
     });
 
@@ -498,6 +528,7 @@ export class ReviewQueueService {
       id: decision.id,
       classificationId: decision.classificationId,
       decision: decision.decision,
+      source: decision.source,
       decidedAt: decision.decidedAt,
       correctedCategory,
     };

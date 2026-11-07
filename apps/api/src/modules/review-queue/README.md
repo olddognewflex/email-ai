@@ -14,6 +14,9 @@ Both list views (the review queue and the actionable list) only show mail
 filtered on the raw email's `internalDate`. See "Received-date window" below.
 
 User decisions are stored in the `ReviewDecision` table for audit and potential training data.
+Decisions with `source: auto` come from auto-approve (`AutoApproveService`, EMAIL-6; see the root
+README): a human decision always replaces them, and they never overwrite a human one.
+`POST /review/auto-approve` (`AutoApproveController`) backfills eligible rows waiting in the review queue (`needsReview: true`, no decision). Unflagged high-confidence rows never reach the queue and are left alone.
 
 ## API Endpoints
 
@@ -138,7 +141,9 @@ model ReviewDecision {
   id                String            @id @default(cuid())
   classificationId  String            @unique
   decision          ReviewDecisionType // approved | rejected
+  correctedCategory String?
   decidedAt         DateTime          @default(now())
+  source            ReviewDecisionSource @default(human) // human | auto (EMAIL-6)
 
   classification    EmailClassification @relation(fields: [classificationId], references: [id], onDelete: Cascade)
 

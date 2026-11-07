@@ -146,7 +146,9 @@ export function DetailScreen({
   const usableWidth = Math.max(20, columns - 4); // border + paddingX
 
   const reasonChunks = chunkText(detail?.reason ?? "", usableWidth, 3);
-  const classificationRows = 4 + reasonChunks.length; // border 2 + title + meta + reason
+  // border 2 + title + meta + decision line (when decided) + reason
+  const classificationRows =
+    4 + (detail?.reviewDecision ? 1 : 0) + reasonChunks.length;
   const chromeRows =
     HEADER_ROWS +
     classificationRows +
@@ -300,6 +302,21 @@ export function DetailScreen({
           {"  confidence: "}
           {detail.confidence}
         </Text>
+        {detail.reviewDecision && (
+          <Text wrap="truncate-end">
+            {detail.reviewDecision.source === "auto" ? (
+              <Text color="blue">auto-approved</Text>
+            ) : (
+              <>
+                {"decided: "}
+                {detail.reviewDecision.decision}
+                {detail.reviewDecision.correctedCategory
+                  ? ` → ${detail.reviewDecision.correctedCategory}`
+                  : ""}
+              </>
+            )}
+          </Text>
+        )}
         {reasonChunks.map((line, i) => (
           <Text key={i} wrap="truncate-end" dimColor>
             {line || " "}

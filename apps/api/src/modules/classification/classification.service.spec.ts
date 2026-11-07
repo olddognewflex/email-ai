@@ -18,6 +18,8 @@ import {
 import { CLASSIFICATION_QUESTION_SET_VERSION } from "./classification.questions";
 import { REVIEW_POLICY_VERSION } from "./classification.judgments";
 import { SenderRulesService } from "../sender-rules/sender-rules.service";
+import { AutoApproveService } from "../review-queue/auto-approve.service";
+import { AppConfigService } from "../config/config.service";
 import {
   MatchableSenderRule,
   compileRules,
@@ -101,6 +103,7 @@ function makeService(
   providerType: string | null,
   ids = ["n1", "n2"],
   rules: MatchableSenderRule[] = [],
+  autoApprove: { enabled: boolean; categories?: string[] } = { enabled: false },
 ) {
   const db = {
     normalizedEmail: {
@@ -114,7 +117,15 @@ function makeService(
           Promise.resolve({ id: "c1", ...args.create }),
         ),
     },
+    reviewDecision: {
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      count: jest.fn().mockResolvedValue(0),
+    },
+    $executeRaw: jest.fn().mockResolvedValue(0),
+    $transaction: jest.fn(),
   };
+  // Interactive transaction: the callback runs against the same mock.
+  db.$transaction.mockImplementation((fn: (tx: typeof db) => unknown) => fn(db));
   const ai = {
     getActiveProviderType: jest.fn().mockResolvedValue(providerType),
     judgeWith: jest
@@ -128,10 +139,23 @@ function makeService(
   const senderRules = {
     getMatcher: jest.fn().mockResolvedValue(compileRules(rules)),
   };
+  const config = {
+    autoApproveEnabled: autoApprove.enabled,
+    autoApproveCategories: autoApprove.categories ?? [
+      "newsletter",
+      "marketing",
+      "archive",
+      "receipt",
+    ],
+  };
   const service = new ClassificationService(
     db as unknown as DatabaseService,
     ai as unknown as AiProviderService,
     senderRules as unknown as SenderRulesService,
+    new AutoApproveService(
+      db as unknown as DatabaseService,
+      config as unknown as AppConfigService,
+    ),
   );
   return { service, db, ai, senderRules };
 }
@@ -733,4 +757,128 @@ describe("ClassificationService — getStats", () => {
     });
     expect(stats.byProvider["sender-rule"]).toBe(2);
   });
+
+  it("reports autoApproved from source=auto review decisions", async () => {
+    const { service, db } = makeService("typesafe");
+    (db.emailClassification as Record<string, jest.Mock>).findMany = jest
+      .fn()
+      .mockResolvedValue([]);
+    db.reviewDecision.count.mockResolvedValue(7);
+
+    const stats = await service.getStats();
+
+    expect(stats.autoApproved).toBe(7);
+    expect(db.reviewDecision.count).toHaveBeenCalledWith({
+      where: { source: "auto" },
+    });
+  });
 });
+
+describe("ClassificationService — auto-approve at classification time (EMAIL-6)", () => {
+  const autoRow = (id: string) => ({
+    data: [{ classificationId: id, decision: "approved", source: "auto" }],
+    skipDuplicates: true,
+  });
+  const ruleFor = (category: string): MatchableSenderRule => ({
+    id: "r1",
+    pattern: "shop.example",
+    matchType: "domain",
+    action: "classify",
+    category,
+    enabled: true,
+  } as MatchableSenderRule);
+
+  it("AI path: an eligible high-confidence row gets an auto approval (insert-if-absent)", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: true });
+
+    await service.classifyEmail("n1");
+
+    const written = db.emailClassification.upsert.mock.calls[0][0].create;
+    expect(written).toMatchObject({ category: "receipt", confidence: "high" });
+    expect(db.reviewDecision.createMany).toHaveBeenCalledWith(autoRow("c1"));
+  });
+
+  it("does nothing while the switch is off", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: false });
+
+    await service.classifyEmail("n1");
+
+    expect(db.reviewDecision.createMany).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for a category that is not on the list", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], {
+      enabled: true,
+      categories: ["newsletter"],
+    });
+
+    await service.classifyEmail("n1");
+
+    expect(db.reviewDecision.createMany).not.toHaveBeenCalled();
+  });
+
+  it("sender-rule path: rule rows (always high) are auto-approved when listed", async () => {
+    const listed = makeService("typesafe", undefined, [ruleFor("marketing")], { enabled: true });
+    await listed.service.classifyEmail("n1");
+    expect(listed.ai.judgeWith).not.toHaveBeenCalled();
+    expect(listed.db.reviewDecision.createMany).toHaveBeenCalledWith(autoRow("c1"));
+
+    const unlisted = makeService("typesafe", undefined, [ruleFor("personal")], { enabled: true });
+    await unlisted.service.classifyEmail("n1");
+    expect(unlisted.db.reviewDecision.createMany).not.toHaveBeenCalled();
+  });
+
+  it("an auto-approve failure is logged; the classification is still returned", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: true });
+    db.reviewDecision.createMany.mockRejectedValue(new Error("db down"));
+
+    const row = await service.classifyEmail("n1");
+
+    expect(row).toMatchObject({ id: "c1", category: "receipt" });
+    expect(rawSql(db)).toEqual([
+      "SAVEPOINT auto_approve",
+      "ROLLBACK TO SAVEPOINT auto_approve",
+    ]);
+  });
+
+  it("writes the row and the approval in one transaction", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: true });
+    const order: string[] = [];
+    db.$transaction.mockImplementation(async (fn: (tx: typeof db) => unknown) => {
+      order.push("begin");
+      const out = await fn(db);
+      order.push("commit");
+      return out;
+    });
+    db.emailClassification.upsert.mockImplementation(async (args: { create: object }) => {
+      order.push("upsert");
+      return { id: "c1", ...args.create };
+    });
+    db.reviewDecision.createMany.mockImplementation(async () => {
+      order.push("approve");
+      return { count: 1 };
+    });
+
+    await service.classifyEmail("n1");
+
+    expect(order).toEqual(["begin", "upsert", "approve", "commit"]);
+    expect(rawSql(db)).toEqual([
+      "SAVEPOINT auto_approve",
+      "RELEASE SAVEPOINT auto_approve",
+    ]);
+  });
+
+  it("skips the savepoint when the row is not eligible", async () => {
+    const { service, db } = makeService("typesafe", undefined, [], { enabled: false });
+
+    await service.classifyEmail("n1");
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.$executeRaw).not.toHaveBeenCalled();
+  });
+});
+
+/** The raw SQL statements run through the `$executeRaw` mock, in order. */
+function rawSql(db: { $executeRaw: jest.Mock }): string[] {
+  return db.$executeRaw.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?"));
+}

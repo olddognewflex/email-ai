@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Env } from './env.schema';
+import { AutoApproveCategory, Env } from './env.schema';
 
 @Injectable()
 export class AppConfigService {
@@ -44,6 +44,20 @@ export class AppConfigService {
    */
   get mailboxWritesEnabled(): boolean {
     return this.config.get('MAILBOX_WRITES_ENABLED', { infer: true }) === true;
+  }
+
+  /**
+   * Auto-approve switch (EMAIL-6): high-confidence classifications in
+   * `autoApproveCategories` get an `auto` approval. False unless
+   * AUTO_APPROVE_ENABLED is exactly "true". Read once at startup.
+   */
+  get autoApproveEnabled(): boolean {
+    return this.config.get('AUTO_APPROVE_ENABLED', { infer: true }) === true;
+  }
+
+  /** Validated AUTO_APPROVE_CATEGORIES (never contains `unknown`). */
+  get autoApproveCategories(): readonly AutoApproveCategory[] {
+    return this.config.get('AUTO_APPROVE_CATEGORIES', { infer: true });
   }
 
   get nodeEnv(): string {
